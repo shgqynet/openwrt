@@ -49,3 +49,19 @@ uci set telnet.general.enable='0' 2>/dev/null || true
 exit 0
 EOF
 chmod +x "$uci_dir/99-custom-settings"
+
+# 6. 预置 OpenClash 内核（极致优化体验）
+# 避免首次安装系统后因无代理导致无法从 GitHub 下载内核的死锁问题（鸡和蛋的问题）
+CORE_DIR="package/base-files/files/etc/openclash/core"
+mkdir -p "$CORE_DIR"
+
+echo "Downloading OpenClash cores..."
+# 下载 Dev 内核
+curl -sL https://raw.githubusercontent.com/vernesong/OpenClash/core/master/dev/clash-linux-amd64.tar.gz | tar xzvC "$CORE_DIR"
+chmod +x "$CORE_DIR/clash"
+
+# 下载 Meta 内核
+curl -sL https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64.tar.gz | tar xzvC "$CORE_DIR"
+mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta"
+chmod +x "$CORE_DIR/clash_meta"
+echo "OpenClash cores downloaded successfully!"
