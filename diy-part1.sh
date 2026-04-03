@@ -19,5 +19,8 @@ echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main'
 # 5. 添加 MosDNS 源（v5 分支，支持规则分流 + DNS-over-HTTPS）
 echo 'src-git mosdns https://github.com/sbwml/luci-app-mosdns.git;v5' >> feeds.conf.default
 
-# 6. 添加 Argon 主题源（确保获取最新版）
+# 6. 添加 AdGuard Home 源（确保获取最新版二进制）
+echo 'src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome.git' >> feeds.conf.default
+
+# 7. 添加 Argon 主题源（确保获取最新版）
 echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git;master' >> feeds.conf.default

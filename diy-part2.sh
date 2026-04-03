@@ -23,13 +23,29 @@ net.netfilter.nf_conntrack_max=131072
 net.nf_conntrack_max=131072
 EOF
 
-# 5. 设置 LuCI 默认主题为 Argon
-uci_file="package/base-files/files/etc/uci-defaults/99-set-argon-theme"
-mkdir -p "$(dirname "$uci_file")"
-cat > "$uci_file" << 'EOF'
+# 5. 预置开机 uci-defaults 脚本（首次启动自动执行，执行后自动删除）
+uci_dir="package/base-files/files/etc/uci-defaults"
+mkdir -p "$uci_dir"
+
+cat > "$uci_dir/99-custom-settings" << 'EOF'
 #!/bin/sh
+
+# 设置系统时区为中国上海
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].zonename='Asia/Shanghai'
+uci commit system
+
+# 设置 LuCI 默认语言为中文
+uci set luci.main.lang='zh_cn'
+uci commit luci
+
+# 设置 LuCI 默认主题为 Argon
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
+
+# 关闭 Telnet（安全加固）
+uci set telnet.general.enable='0' 2>/dev/null || true
+
 exit 0
 EOF
-chmod +x "$uci_file"
+chmod +x "$uci_dir/99-custom-settings"
