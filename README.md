@@ -1,39 +1,38 @@
-**English** | [中文](https://p3terx.com/archives/build-openwrt-with-github-actions.html)
+# 我的 OpenWrt 固件方案 (x86_64)
 
-# Actions-OpenWrt
+这是一个专为 x86_64 平台（支持 VMware/ESXi 和实体机）优化的 OpenWrt 编译方案。
 
-[![LICENSE](https://img.shields.io/github/license/mashape/apistatus.svg?style=flat-square&label=LICENSE)](https://github.com/P3TERX/Actions-OpenWrt/blob/master/LICENSE)
-![GitHub Stars](https://img.shields.io/github/stars/P3TERX/Actions-OpenWrt.svg?style=flat-square&label=Stars&logo=github)
-![GitHub Forks](https://img.shields.io/github/forks/P3TERX/Actions-OpenWrt.svg?style=flat-square&label=Forks&logo=github)
+## 📁 核心脚本说明
 
-A template for building OpenWrt with GitHub Actions
+为了方便本地编译，我准备了两个简单易懂的脚本：
 
-## Usage
+1. **首次编译.sh**
+   - **适用环境**：Ubuntu 22.04 LTS (推荐 WSL2 或虚拟机)。
+   - **功能**：自动安装依赖环境、克隆源码、应用我的私人配置并开始全量编译。
 
-- Click the [Use this template](https://github.com/P3TERX/Actions-OpenWrt/generate) button to create a new repository.
-- Generate `.config` files using [Lean's OpenWrt](https://github.com/coolsnowwolf/lede) source code. ( You can change it through environment variables in the workflow file. )
-- Push `.config` file to the GitHub repository.
-- Select `Build OpenWrt` on the Actions page.
-- Click the `Run workflow` button.
-- When the build is complete, click the `Artifacts` button in the upper right corner of the Actions page to download the binaries.
+2. **更新编译.sh**
+   - **用法**：已经编译过一次后想修改配置或更新补丁时运行。
+   - **特色**：保留编译缓存进行增量编译。通常只需 5-15 分钟即可出新固件。
 
-## Tips
+## 🛠️ 配置亮点
 
-- It may take a long time to create a `.config` file and build the OpenWrt firmware. Thus, before create repository to build your own firmware, you may check out if others have already built it which meet your needs by simply [search `Actions-Openwrt` in GitHub](https://github.com/search?q=Actions-openwrt).
-- Add some meta info of your built firmware (such as firmware architecture and installed packages) to your repository introduction, this will save others' time.
+- **架构优化**：针对 x86_64 优化，集成 Intel/Realtek/Broadcom (BCM5719) 等常见网卡驱动。
+- **主力插件**：
+  - **OpenClash**：已预置 Meta 内核，支持分流与广告过滤。
+  - **DDNS**：原生支持阿里云 (Aliyun) 动态域名解析。
+  - **性能加速**：集成 Turbo ACC 网络加速。
+- **界面定制**：默认使用经典的 **Argon** 主题。
+- **网络网段**：默认后台 IP 为 `192.168.3.1`。
 
-## Credits
+## 🚀 本地开始指南
 
-- [Microsoft Azure](https://azure.microsoft.com)
-- [GitHub Actions](https://github.com/features/actions)
-- [OpenWrt](https://github.com/openwrt/openwrt)
-- [coolsnowwolf/lede](https://github.com/coolsnowwolf/lede)
-- [Mikubill/transfer](https://github.com/Mikubill/transfer)
-- [softprops/action-gh-release](https://github.com/softprops/action-gh-release)
-- [Mattraks/delete-workflow-runs](https://github.com/Mattraks/delete-workflow-runs)
-- [dev-drprasad/delete-older-releases](https://github.com/dev-drprasad/delete-older-releases)
-- [peter-evans/repository-dispatch](https://github.com/peter-evans/repository-dispatch)
+1. 将本仓库克隆/下载至 Ubuntu 工作目录。
+2. 确保网络通畅（建议配置 export http_proxy）。
+3. 执行脚本开始：
+   ```bash
+   chmod +x *.sh
+   ./首次编译.sh
+   ```
 
-## License
-
-[MIT](https://github.com/P3TERX/Actions-OpenWrt/blob/main/LICENSE) © [**P3TERX**](https://p3terx.com)
+---
+*注：硬盘剩余空间建议 > 50GB，内存推荐 8GB 以上。*
