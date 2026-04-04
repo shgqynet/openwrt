@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      actions: write
 
     steps:
     - name: Checkout
@@ -121,6 +122,11 @@ jobs:
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
+
+    - name: Fix VMDK for ESXi
+      if: steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+        find openwrt/bin/targets/ -name "*.vmdk" -exec qemu-img resize -f vmdk {} 16G \;
 
     - name: Organize files
       id: organize
