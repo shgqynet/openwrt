@@ -83,11 +83,8 @@ CORE_DIR="package/base-files/files/etc/openclash/core"
 mkdir -p "$CORE_DIR"
 
 echo "Downloading OpenClash cores..."
-# 下载 Dev 内核
-curl -sL https://raw.githubusercontent.com/vernesong/OpenClash/core/master/dev/clash-linux-amd64.tar.gz | tar xzvC "$CORE_DIR"
-chmod +x "$CORE_DIR/clash"
 
-# 下载 Meta 内核
+# 下载 Meta 内核 (目前只用 Meta 内核即可，Dev 内核仓库路径已失效)
 curl -sL https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64.tar.gz | tar xzvC "$CORE_DIR"
 mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta"
 chmod +x "$CORE_DIR/clash_meta"
