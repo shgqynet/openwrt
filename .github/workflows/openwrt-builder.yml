@@ -126,7 +126,17 @@ jobs:
     - name: Fix VMDK for ESXi
       if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
-        find openwrt/bin/targets/ -name "*.vmdk" -exec qemu-img resize -f vmdk {} 16G \;
+        find openwrt/bin/targets/ -name "*.vmdk" | while read vmdk; do
+          raw="${vmdk%.vmdk}.raw"
+          echo "Converting $vmdk → raw..."
+          qemu-img convert -f vmdk -O raw "$vmdk" "$raw"
+          echo "Resizing to 16G..."
+          qemu-img resize "$raw" 16G
+          echo "Converting back to VMDK (clean geometry)..."
+          qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse "$raw" "$vmdk"
+          rm -f "$raw"
+          echo "Done: $vmdk"
+        done
 
     - name: Organize files
       id: organize
