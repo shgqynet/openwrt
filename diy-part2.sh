@@ -48,27 +48,34 @@ uci set telnet.general.enable='0' 2>/dev/null || true
 
 # ==================== 注入你的个人网络架构 ====================
 # 1. 恢复 LAN 的多物理网口桥接 (eth0 到 eth3全归属为内网口)
+# 增加判断：如果当前网口桥接不完整（没有 eth3），则补全预设桥接（防止覆盖升级时保留的自定义网口设置）
 uci set network.@device[0].name='br-lan'
 uci set network.@device[0].type='bridge'
-uci -q delete network.@device[0].ports
-uci add_list network.@device[0].ports='eth0'
-uci add_list network.@device[0].ports='eth1'
-uci add_list network.@device[0].ports='eth2'
-uci add_list network.@device[0].ports='eth3'
+if ! uci -q get network.@device[0].ports | grep -q 'eth3'; then
+    uci -q delete network.@device[0].ports
+    uci add_list network.@device[0].ports='eth0'
+    uci add_list network.@device[0].ports='eth1'
+    uci add_list network.@device[0].ports='eth2'
+    uci add_list network.@device[0].ports='eth3'
+fi
 
 # 2. 恢复 LAN 的多网段 IP 设定 (支持 192.168.3.1 和 192.168.2.1)
 uci set network.lan.device='br-lan'
-uci -q delete network.lan.ipaddr
-uci -q delete network.lan.netmask
-uci add_list network.lan.ipaddr='192.168.3.1/24'
-uci add_list network.lan.ipaddr='192.168.2.1/24'
+# 增加判断：如果当前没设置过第二个网段（2.1），再进行预设（防止覆盖升级时保留的自定义 IP）
+if ! uci -q get network.lan.ipaddr | grep -q '192.168.2.1'; then
+    uci -q delete network.lan.ipaddr
+    uci -q delete network.lan.netmask
+    uci add_list network.lan.ipaddr='192.168.3.1/24'
+    uci add_list network.lan.ipaddr='192.168.2.1/24'
+fi
 
 # 3. 恢复 WAN 物理网口位置 (强制绑定在外网线插入的 eth4 口)
-# 并预设为 PPPoE 拨号模式 (账号密码留空，保证核心隐私安全)
+# 增加逻辑：仅当账号为空时才预设为 PPPoE (避免保留配置升级时覆盖掉你手动输入的账号)
 uci set network.wan.device='eth4'
-uci set network.wan.proto='pppoe'
-uci -q delete network.wan.username
-uci -q delete network.wan.password
+if [ -z "$(uci -q get network.wan.username)" ]; then
+    uci set network.wan.proto='pppoe'
+    uci -q delete network.wan.password
+fi
 
 uci commit network
 # ============================================================
