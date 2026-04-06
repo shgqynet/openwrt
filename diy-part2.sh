@@ -4,8 +4,8 @@
 # 用途：修改默认配置，预置自定义设置
 #
 
-# 1. 修改默认 LAN IP 为你习惯的网段 (3.1)
-sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generate
+# 1. 修改默认 LAN IP 为你习惯的网段 (2.1)
+sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
 
 # 2. 修改默认主机名
 sed -i 's/OpenWrt/MyOpenWrt/g' package/base-files/files/bin/config_generate
@@ -46,6 +46,44 @@ uci commit luci
 # 关闭 Telnet（安全加固）
 uci set telnet.general.enable='0' 2>/dev/null || true
 
+# --- 自动配置 WireGuard 基础环境接口与防火墙 ---
+# 1. 建立 wg0 接口（默认监听 51820 端口，网段 10.0.0.1/24）
+uci -q delete network.wg0
+uci set network.wg0="interface"
+uci set network.wg0.proto="wireguard"
+uci set network.wg0.listen_port="51820"
+uci add_list network.wg0.addresses="10.0.0.1/24"
+uci commit network
+
+# 2. 建立 WireGuard 防火墙区域并放行端口
+uci -q delete firewall.wg
+uci set firewall.wg="zone"
+uci set firewall.wg.name="wireguard"
+uci set firewall.wg.input="ACCEPT"
+uci set firewall.wg.output="ACCEPT"
+uci set firewall.wg.forward="ACCEPT"
+uci set firewall.wg.masq="1"
+uci add_list firewall.wg.network="wg0"
+
+# WAN 口放行 51820 UDP 端口
+uci -q delete firewall.wg_rule
+uci set firewall.wg_rule="rule"
+uci set firewall.wg_rule.name="Allow-WireGuard"
+uci set firewall.wg_rule.src="wan"
+uci set firewall.wg_rule.dest_port="51820"
+uci set firewall.wg_rule.proto="udp"
+uci set firewall.wg_rule.target="ACCEPT"
+
+# 允许 wg 和 lan 互通
+uci -q delete firewall.wg_lan_forward
+uci set firewall.wg_lan_forward="forwarding"
+uci set firewall.wg_lan_forward.src="wireguard"
+uci set firewall.wg_lan_forward.dest="lan"
+uci -q delete firewall.lan_wg_forward
+uci set firewall.lan_wg_forward="forwarding"
+uci set firewall.lan_wg_forward.src="lan"
+uci set firewall.lan_wg_forward.dest="wireguard"
+uci commit firewall
 
 exit 0
 EOF
@@ -63,3 +101,7 @@ curl -sL https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/
 mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta"
 chmod +x "$CORE_DIR/clash_meta"
 echo "OpenClash cores downloaded successfully!"
+
+# 7. 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
+echo "CONFIG_PACKAGE_qrencode=y" >> .config
+
