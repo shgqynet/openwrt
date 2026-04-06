@@ -26,6 +26,14 @@ git checkout .
 echo -e "\n[2/5] 从 Lean 的官方仓库同步并拉取最新的一手源码..."
 git pull origin master
 
+echo -e "\n[2.5/5] 执行环境准备 ( diy-part1.sh ) ..."
+if [ -f "$BASE_DIR/diy-part1.sh" ]; then
+    echo "✅ 挂载 diy-part1.sh 添加第三方插件源..."
+    bash "$BASE_DIR/diy-part1.sh"
+else
+    echo "未找到 diy-part1.sh，跳过这一步。"
+fi
+
 echo -e "\n[3/5] 更新并安装所有的第三方插件源 (Feeds)..."
 ./scripts/feeds update -a
 ./scripts/feeds install -a
@@ -46,14 +54,31 @@ fi
 
 echo -e "\n[5/5] 🚀开始光速级别的增量编译！"
 # 如果有新的包，稍微下载一下 (耗时极短，因为99%都在本地了)
-make download -j8 V=s
+set +e
+for i in 1 2 3; do
+    echo "尝试执行代码包下载，第 $i 次运行..."
+    make download -j8 V=s
+    if [ $? -eq 0 ]; then
+        echo "✅ 下载步骤结束。"
+        break
+    else
+        echo "⚠️  下载过程中遇到网络阻断或超时报错！准备重试..."
+        if [ $i -eq 3 ]; then
+            echo "❌ 严重错误：下载连续失败 3 次。请检查终端网络！"
+            exit 1
+        fi
+        sleep 3
+    fi
+done
+set -e
 
 CORES=$(nproc)
+MAKE_CORES=$((CORES + 1))
 echo "检测到 $CORES 个核心。增量编译通常只需 5~15 分钟，喝口水就好。"
 
 set +e
 # 直接 make，绝不执行 make clean（那会清理掉所有心血缓存重头再来）
-make -j$CORES V=s
+make -j$MAKE_CORES V=s
 COMPILE_RES=$?
 set -e
 
@@ -63,6 +88,9 @@ if [ $COMPILE_RES -eq 0 ]; then
     echo " 你的全新版本固件在: $(pwd)/bin/targets/"
     echo "==========================================================="
 else
-    echo "⚠️ 增量编译由于代码结构改变发生了冲突错误，转入单线程排错..."
+    echo "==========================================================="
+    echo " ⚠️ 增量编译由于代码结构改变发生错误，转入单线程排错..."
     make -j1 V=s
+    echo "❌ 如果单线程在这里停下，请截图上方的英文报错信息，那就是源头！"
+    echo "==========================================================="
 fi

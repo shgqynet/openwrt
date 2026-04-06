@@ -30,9 +30,16 @@ if [[ "$BASE_DIR" == *" "* ]]; then
 fi
 
 # --- 问题排查 3：磁盘空间检查 (可用空间至少要 30G) ---
-FREE_SPACE_GB=$(df -kh . | tail -n1 | awk '{print $4}' | sed 's/G//')
-# 用整数比对稍微有些复杂，因为 df 可能带 M 或者是小数字，粗略检查一下
 echo -e "\n[准备] 当前磁盘情况检查，请确保剩余容量 > 30GB..."
+FREE_SPACE_KB=$(df -k . | tail -n1 | awk '{print $4}')
+FREE_SPACE_GB=$((FREE_SPACE_KB / 1024 / 1024))
+if [ "$FREE_SPACE_GB" -lt 30 ]; then
+  echo "❌ 严重错误：当前磁盘剩余空间仅剩约 ${FREE_SPACE_GB}GB，可能导致编译中途失败退出。"
+  echo "👉 请清理磁盘，确保至少有 30GB 以上剩余空间后再次执行。"
+  exit 1
+else
+  echo "✅ 磁盘空间充足 (${FREE_SPACE_GB}GB)。"
+fi
 
 # --- 安装编译必备依赖 (针对全新安装的系统) ---
 echo -e "\n[准备] 正在为全新安装的系统配置编译依赖环境..."
@@ -115,6 +122,7 @@ for i in 1 2 3; do
         echo "⚠️  下载过程中遇到网络阻断或超时报错！准备重试..."
         if [ $i -eq 3 ]; then
             echo "❌ 严重错误：下载组件包连续失败 3 次。请务必检查你的终端网络是否可以正常访问 Github 和海外资源（如配置 export ALL_PROXY=xxx）！"
+            exit 1
         fi
         sleep 3
     fi
@@ -123,13 +131,14 @@ set -e
 
 echo -e "\n[7/7] 💥 鸣枪开战: 开始固件漫长编译！ 💥"
 CORES=$(nproc)
+MAKE_CORES=$((CORES + 1))
 # 推荐首次编译只用一个核心(V=s 打印详细日志)可以防止多线程死锁。但现代机器一般多线编译容错已提高，我们这里做双重保险：多核全速跑，如果挂了切单核排错。
 echo "检测到系统分配了 $CORES 个 CPU 核心！"
 echo "☕ 开始执行全速编译（约 1-3 小时），请勿关闭终端窗口！"
 
 # 关闭因为编译报错导致的直接退出，自己捕获
 set +e
-make -j$CORES V=s
+make -j$MAKE_CORES V=s
 COMPILE_RES=$?
 set -e
 
