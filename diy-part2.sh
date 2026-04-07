@@ -47,69 +47,72 @@ uci commit luci
 uci set telnet.general.enable='0' 2>/dev/null || true
 
 # --- 自动配置 WireGuard 基础环境接口与防火墙 ---
-# 1. 自动生成服务端和客户端专属密钥
-WG_SERVER_PRIV="$(wg genkey)"
-WG_CLIENT_PRIV="$(wg genkey)"
-WG_CLIENT_PUB="$(echo $WG_CLIENT_PRIV | wg pubkey)"
-WG_PC_PRIV="$(wg genkey)"
-WG_PC_PUB="$(echo $WG_PC_PRIV | wg pubkey)"
+# 判断 wg0 接口是否存在，防止系统升级保留配置时覆盖原有密钥等数据
+if ! uci -q get network.wg0 > /dev/null; then
+	# 1. 自动生成服务端和客户端专属密钥
+	WG_SERVER_PRIV="$(wg genkey)"
+	WG_CLIENT_PRIV="$(wg genkey)"
+	WG_CLIENT_PUB="$(echo $WG_CLIENT_PRIV | wg pubkey)"
+	WG_PC_PRIV="$(wg genkey)"
+	WG_PC_PUB="$(echo $WG_PC_PRIV | wg pubkey)"
 
-# 2. 建立 wg0 接口，自动注入服务端私钥
-uci -q delete network.wg0
-uci set network.wg0="interface"
-uci set network.wg0.proto="wireguard"
-uci set network.wg0.private_key="$WG_SERVER_PRIV"
-uci set network.wg0.listen_port="51820"
-uci add_list network.wg0.addresses="10.0.0.1/24"
+	# 2. 建立 wg0 接口，自动注入服务端私钥
+	uci set network.wg0="interface"
+	uci set network.wg0.proto="wireguard"
+	uci set network.wg0.private_key="$WG_SERVER_PRIV"
+	uci set network.wg0.listen_port="51820"
+	uci add_list network.wg0.addresses="10.0.0.1/24"
 
-# 3. 自动建立名为 MyPhone 的预设手机节点（分配 10.0.0.2 IP）
-uci -q delete network.wg_client_phone
-uci set network.wg_client_phone="wireguard_wg0"
-uci set network.wg_client_phone.description="MyPhone"
-uci set network.wg_client_phone.public_key="$WG_CLIENT_PUB"
-uci set network.wg_client_phone.private_key="$WG_CLIENT_PRIV"
-uci set network.wg_client_phone.route_allowed_ips="1"
-uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
+	# 3. 自动建立名为 MyPhone 的预设手机节点（分配 10.0.0.2 IP）
+	uci set network.wg_client_phone="wireguard_wg0"
+	uci set network.wg_client_phone.description="MyPhone"
+	uci set network.wg_client_phone.public_key="$WG_CLIENT_PUB"
+	uci set network.wg_client_phone.private_key="$WG_CLIENT_PRIV"
+	uci set network.wg_client_phone.route_allowed_ips="1"
+	uci set network.wg_client_phone.endpoint_port="51820"
+	uci set network.wg_client_phone.persistent_keepalive="25"
+	uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
 
-# 4. 自动建立名为 MyPC 的预设电脑节点（分配 10.0.0.3 IP）
-uci -q delete network.wg_client_pc
-uci set network.wg_client_pc="wireguard_wg0"
-uci set network.wg_client_pc.description="MyPC"
-uci set network.wg_client_pc.public_key="$WG_PC_PUB"
-uci set network.wg_client_pc.private_key="$WG_PC_PRIV"
-uci set network.wg_client_pc.route_allowed_ips="1"
-uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
-uci commit network
+	# 4. 自动建立名为 MyPC 的预设电脑节点（分配 10.0.0.3 IP）
+	uci set network.wg_client_pc="wireguard_wg0"
+	uci set network.wg_client_pc.description="MyPC"
+	uci set network.wg_client_pc.public_key="$WG_PC_PUB"
+	uci set network.wg_client_pc.private_key="$WG_PC_PRIV"
+	uci set network.wg_client_pc.route_allowed_ips="1"
+	uci set network.wg_client_pc.endpoint_port="51820"
+	uci set network.wg_client_pc.persistent_keepalive="25"
+	uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
+	uci commit network
+fi
 
-# 2. 建立 WireGuard 防火墙区域并放行端口
-uci -q delete firewall.wg
-uci set firewall.wg="zone"
-uci set firewall.wg.name="wireguard"
-uci set firewall.wg.input="ACCEPT"
-uci set firewall.wg.output="ACCEPT"
-uci set firewall.wg.forward="ACCEPT"
-uci set firewall.wg.masq="1"
-uci add_list firewall.wg.network="wg0"
+if ! uci -q get firewall.wg > /dev/null; then
+	# 5. 建立 WireGuard 防火墙区域并放行端口
+	uci set firewall.wg="zone"
+	uci set firewall.wg.name="wireguard"
+	uci set firewall.wg.input="ACCEPT"
+	uci set firewall.wg.output="ACCEPT"
+	uci set firewall.wg.forward="ACCEPT"
+	uci set firewall.wg.masq="1"
+	uci add_list firewall.wg.network="wg0"
 
-# WAN 口放行 51820 UDP 端口
-uci -q delete firewall.wg_rule
-uci set firewall.wg_rule="rule"
-uci set firewall.wg_rule.name="Allow-WireGuard"
-uci set firewall.wg_rule.src="wan"
-uci set firewall.wg_rule.dest_port="51820"
-uci set firewall.wg_rule.proto="udp"
-uci set firewall.wg_rule.target="ACCEPT"
+	# WAN 口放行 51820 UDP 端口
+	uci set firewall.wg_rule="rule"
+	uci set firewall.wg_rule.name="Allow-WireGuard"
+	uci set firewall.wg_rule.src="wan"
+	uci set firewall.wg_rule.dest_port="51820"
+	uci set firewall.wg_rule.proto="udp"
+	uci set firewall.wg_rule.target="ACCEPT"
 
-# 允许 wg 和 lan 互通
-uci -q delete firewall.wg_lan_forward
-uci set firewall.wg_lan_forward="forwarding"
-uci set firewall.wg_lan_forward.src="wireguard"
-uci set firewall.wg_lan_forward.dest="lan"
-uci -q delete firewall.lan_wg_forward
-uci set firewall.lan_wg_forward="forwarding"
-uci set firewall.lan_wg_forward.src="lan"
-uci set firewall.lan_wg_forward.dest="wireguard"
-uci commit firewall
+	# 允许 wg 和 lan 互通
+	uci set firewall.wg_lan_forward="forwarding"
+	uci set firewall.wg_lan_forward.src="wireguard"
+	uci set firewall.wg_lan_forward.dest="lan"
+	
+	uci set firewall.lan_wg_forward="forwarding"
+	uci set firewall.lan_wg_forward.src="lan"
+	uci set firewall.lan_wg_forward.dest="wireguard"
+	uci commit firewall
+fi
 
 exit 0
 EOF
