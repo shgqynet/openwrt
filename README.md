@@ -119,4 +119,65 @@ chmod +x *.sh
 *注意：确保您的宽带有公网 IP 或者是进行过内网穿透折腾，并且已在光猫和主路由上做好了 udp 协议 `51820` 端口的转发。*
 
 ---
+
+## 📡 OpenVPN "零命令"使用指南
+
+本固件同样内置了 OpenVPN 服务端的全自动初始化机制。刷机首次启动后，系统会在后台**自动完成以下所有步骤**，整个过程约 30 秒，您完全不需要手动操作：
+
+- ✅ 生成 CA 根证书
+- ✅ 生成服务端证书与私钥
+- ✅ 生成客户端证书与私钥
+- ✅ 生成 TLS-Auth 防暴力破解密钥
+- ✅ 写入 `/etc/openvpn/server.conf`（端口 1194/UDP，AES-256-GCM 加密）
+- ✅ 生成 `/root/client.ovpn`（内嵌所有证书，开箱即用）
+- ✅ 自动放行防火墙端口
+
+### 📥 第一步：获取客户端配置文件
+
+**方法一：SCP 下载（推荐，一条命令搞定）**
+
+在 Windows PowerShell 或 Mac 终端执行：
+```bash
+scp root@192.168.3.1:/root/client.ovpn ./client.ovpn
+```
+文件会下载到当前目录。
+
+**方法二：SSH 复制粘贴**
+
+SSH 进路由器后执行：
+```bash
+cat /root/client.ovpn
+```
+将全部输出内容复制，在本地新建一个空白 `.ovpn` 文件粘贴保存。
+
+### ✏️ 第二步：修改域名（唯一需要手动做的事）
+
+用任意文本编辑器打开 `client.ovpn`，找到第 4 行：
+```
+remote YOUR-DDNS-DOMAIN.COM 1194
+```
+将 `YOUR-DDNS-DOMAIN.COM` 替换为您的**阿里云 DDNS 域名**（即您在 `luci-app-aliddns` 中配置的域名），保存文件。
+
+### 📱 第三步：手机导入使用
+
+1. 手机安装 **OpenVPN Connect**（iOS / Android 均可在应用商店搜索）。
+2. 将修改好的 `client.ovpn` 通过微信、AirDrop、邮件等任何方式发到手机。
+3. 点击文件，选择用 OpenVPN Connect 打开，点击 **Add** 导入。
+4. 点击连接，输入路由器密码（如有），连接成功。
+
+### ⚠️ 前提条件
+
+- 宽带需有**公网 IP**，并在光猫/主路由上做好 **UDP 1194 端口转发**。
+- 确认 OpenVPN 服务已启动：`服务 → OpenVPN → server 实例状态为 Running`。
+
+### 🔄 如果需要重新生成证书
+
+刷新固件即可（uci-defaults 会在首次启动时重新运行）。若不刷机，手动执行：
+```bash
+rm /etc/openvpn/keys/ca.crt  # 删除标记文件
+sh /etc/uci-defaults/98-openvpn-setup  # 重新执行初始化（注意：执行后 uci-defaults 会被删除，这是正常的）
+```
+
+---
 *注：由于 Linux 终端兼容性考虑，所有主干命令控制脚本均统一采用了英文命名。*
+

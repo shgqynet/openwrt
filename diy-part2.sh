@@ -61,6 +61,7 @@ if ! uci -q get network.wg0 > /dev/null; then
 	uci set network.wg0.proto="wireguard"
 	uci set network.wg0.private_key="$WG_SERVER_PRIV"
 	uci set network.wg0.listen_port="51820"
+	uci set network.wg0.mtu="1280"
 	uci add_list network.wg0.addresses="10.0.0.1/24"
 
 	# 3. 自动建立名为 MyPhone 的预设手机节点（分配 10.0.0.2 IP）
@@ -71,7 +72,9 @@ if ! uci -q get network.wg0 > /dev/null; then
 	uci set network.wg_client_phone.route_allowed_ips="1"
 	uci set network.wg_client_phone.endpoint_port="51820"
 	uci set network.wg_client_phone.persistent_keepalive="25"
-	uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
+	# 全流量模式：手机所有流量都走 WireGuard 隧道，经由路由器 OpenClash 出去
+	uci add_list network.wg_client_phone.allowed_ips="0.0.0.0/0"
+	uci add_list network.wg_client_phone.allowed_ips="::/0"
 
 	# 4. 自动建立名为 MyPC 的预设电脑节点（分配 10.0.0.3 IP）
 	uci set network.wg_client_pc="wireguard_wg0"
@@ -117,6 +120,110 @@ fi
 exit 0
 EOF
 chmod +x "$uci_dir/99-custom-settings"
+
+# 8. 预置 OpenVPN 服务端自动初始化脚本
+# 原理：固件首次启动时自动生成 CA + 证书 + server.conf + client.ovpn
+# 无需第三方插件，openssl 已随 openvpn-openssl 一同打包进固件
+cat > "$uci_dir/98-openvpn-setup" << 'OVPNEOF'
+#!/bin/sh
+# OpenVPN 服务端首次启动自动初始化
+
+# 已初始化过则跳过
+[ -f /etc/openvpn/keys/ca.crt ] && exit 0
+
+logger "OpenVPN: 首次运行，开始自动生成证书（约需 30 秒）..."
+mkdir -p /etc/openvpn/keys
+chmod 700 /etc/openvpn/keys
+
+# --- 生成 CA ---
+openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null
+openssl req -new -x509 -days 3650 \
+    -key /etc/openvpn/keys/ca.key \
+    -out /etc/openvpn/keys/ca.crt \
+    -subj "/CN=MyRouter-CA" 2>/dev/null
+
+# --- 生成服务端证书 ---
+openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null
+openssl req -new -key /etc/openvpn/keys/server.key \
+    -out /etc/openvpn/keys/server.csr -subj "/CN=MyRouter-Server" 2>/dev/null
+openssl x509 -req -days 3650 \
+    -in /etc/openvpn/keys/server.csr \
+    -CA /etc/openvpn/keys/ca.crt \
+    -CAkey /etc/openvpn/keys/ca.key \
+    -CAcreateserial -out /etc/openvpn/keys/server.crt 2>/dev/null
+
+# --- 生成客户端证书 ---
+openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null
+openssl req -new -key /etc/openvpn/keys/client.key \
+    -out /etc/openvpn/keys/client.csr -subj "/CN=MyPhone-Client" 2>/dev/null
+openssl x509 -req -days 3650 \
+    -in /etc/openvpn/keys/client.csr \
+    -CA /etc/openvpn/keys/ca.crt \
+    -CAkey /etc/openvpn/keys/ca.key \
+    -CAcreateserial -out /etc/openvpn/keys/client.crt 2>/dev/null
+
+# --- TLS-Auth key（防暴力破解攻击）---
+openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
+
+# --- 服务端配置文件 ---
+cat > /etc/openvpn/server.conf << 'CONEOF'
+port 1194
+proto udp
+dev tun
+ca /etc/openvpn/keys/ca.crt
+cert /etc/openvpn/keys/server.crt
+key /etc/openvpn/keys/server.key
+dh none
+ecdh-curve prime256v1
+tls-auth /etc/openvpn/keys/ta.key 0
+cipher AES-256-GCM
+auth SHA256
+server 10.8.0.0 255.255.255.0
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 192.168.3.1"
+keepalive 10 120
+persist-key
+persist-tun
+status /tmp/openvpn-status.log
+verb 3
+CONEOF
+
+# --- 注册 UCI 服务实例 ---
+uci set openvpn.server=openvpn
+uci set openvpn.server.enabled='1'
+uci set openvpn.server.config='/etc/openvpn/server.conf'
+uci commit openvpn
+
+# --- 防火墙放行 1194/UDP ---
+uci set firewall.openvpn=rule
+uci set firewall.openvpn.name='Allow-OpenVPN'
+uci set firewall.openvpn.src='wan'
+uci set firewall.openvpn.dest_port='1194'
+uci set firewall.openvpn.proto='udp'
+uci set firewall.openvpn.target='ACCEPT'
+uci commit firewall
+
+# --- 生成内嵌所有证书的 client.ovpn ---
+# remote 行先写占位符，用户改成自己的 DDNS 域名即可
+{
+  printf "client\ndev tun\nproto udp\n"
+  printf "remote YOUR-DDNS-DOMAIN.COM 1194\n"
+  printf "resolv-retry infinite\nnobind\n"
+  printf "persist-key\npersist-tun\n"
+  printf "cipher AES-256-GCM\nauth SHA256\n"
+  printf "key-direction 1\nverb 3\n\n"
+  printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"
+  printf "<cert>\n"; openssl x509 -in /etc/openvpn/keys/client.crt; printf "</cert>\n\n"
+  printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"
+  printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"
+} > /root/client.ovpn
+chmod 600 /root/client.ovpn
+
+logger "OpenVPN: 初始化完成！"
+logger "OpenVPN: 客户端配置 → /root/client.ovpn"
+logger "OpenVPN: 修改文件中的 YOUR-DDNS-DOMAIN.COM 为你的域名后即可使用"
+OVPNEOF
+chmod +x "$uci_dir/98-openvpn-setup"
 
 # 6. 预置 OpenClash 内核（极致优化体验）
 # 避免首次安装系统后因无代理导致无法从 GitHub 下载内核的死锁问题（鸡和蛋的问题）
