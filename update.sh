@@ -20,11 +20,13 @@ fi
 cd "$BASE_DIR/lede"
 
 echo -e "\n[1/5] 正在清理上一次 diy-part 造成的本地文件改动以防止代码冲突..."
-# 【魔法操作所在】：撤销本地 C 代码和配置文件的修改，但完美保留所有编译好的 .o 缓存文件！
+# 【魔法操作所在】：撤销本地 C 代码和配置文件的修改，移除未跟踪文件，但完美保留所有编译好的 .o 缓存文件！
 git checkout .
+git clean -df
 
-echo -e "\n[2/5] 从 Lean 的官方仓库同步并拉取最新的一手源码..."
-git pull origin master
+echo -e "\n[2/5] 从 Lean 的官方仓库同步并强制对齐最新代码..."
+git fetch --all
+git reset --hard origin/master
 
 echo -e "\n[2.5/5] 执行环境准备 ( diy-part1.sh ) ..."
 if [ -f "$BASE_DIR/diy-part1.sh" ]; then
@@ -35,7 +37,24 @@ else
 fi
 
 echo -e "\n[3/5] 更新并安装所有的第三方插件源 (Feeds)..."
-./scripts/feeds update -a
+# 增加 Feeds 更新重试机制
+set +e
+for i in 1 2 3; do
+    echo "正在更新 Feeds，第 $i 次尝试..."
+    ./scripts/feeds update -a
+    if [ $? -eq 0 ]; then
+        echo "✅ Feeds 更新成功。"
+        break
+    else
+        echo "⚠️  Feeds 更新失败，准备重试..."
+        if [ $i -eq 3 ]; then
+            echo "❌ 严重错误：Feeds 更新连续失败 3 次。请检查网络！"
+            exit 1
+        fi
+        sleep 2
+    fi
+done
+set -e
 ./scripts/feeds install -a
 
 echo -e "\n[4/5] 重新注入你的私人定制配置 (diy-part2 及 .config)..."
