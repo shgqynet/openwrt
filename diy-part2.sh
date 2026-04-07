@@ -4,8 +4,8 @@
 # 用途：修改默认配置，预置自定义设置
 #
 
-# 1. 修改默认 LAN IP 为你习惯的网段 (2.1)
-sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
+# 1. 修改默认 LAN IP 为你习惯的网段 (3.1)
+sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generate
 
 # 2. 修改默认主机名
 sed -i 's/OpenWrt/MyOpenWrt/g' package/base-files/files/bin/config_generate
