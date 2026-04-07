@@ -51,6 +51,8 @@ uci set telnet.general.enable='0' 2>/dev/null || true
 WG_SERVER_PRIV="$(wg genkey)"
 WG_CLIENT_PRIV="$(wg genkey)"
 WG_CLIENT_PUB="$(echo $WG_CLIENT_PRIV | wg pubkey)"
+WG_PC_PRIV="$(wg genkey)"
+WG_PC_PUB="$(echo $WG_PC_PRIV | wg pubkey)"
 
 # 2. 建立 wg0 接口，自动注入服务端私钥
 uci -q delete network.wg0
@@ -60,7 +62,7 @@ uci set network.wg0.private_key="$WG_SERVER_PRIV"
 uci set network.wg0.listen_port="51820"
 uci add_list network.wg0.addresses="10.0.0.1/24"
 
-# 3. 自动建立名为 MyPhone 的预设手机节点（分配 10.0.0.2 IP 与生成的手机密钥）
+# 3. 自动建立名为 MyPhone 的预设手机节点（分配 10.0.0.2 IP）
 uci -q delete network.wg_client_phone
 uci set network.wg_client_phone="wireguard_wg0"
 uci set network.wg_client_phone.description="MyPhone"
@@ -68,6 +70,15 @@ uci set network.wg_client_phone.public_key="$WG_CLIENT_PUB"
 uci set network.wg_client_phone.private_key="$WG_CLIENT_PRIV"
 uci set network.wg_client_phone.route_allowed_ips="1"
 uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
+
+# 4. 自动建立名为 MyPC 的预设电脑节点（分配 10.0.0.3 IP）
+uci -q delete network.wg_client_pc
+uci set network.wg_client_pc="wireguard_wg0"
+uci set network.wg_client_pc.description="MyPC"
+uci set network.wg_client_pc.public_key="$WG_PC_PUB"
+uci set network.wg_client_pc.private_key="$WG_PC_PRIV"
+uci set network.wg_client_pc.route_allowed_ips="1"
+uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
 uci commit network
 
 # 2. 建立 WireGuard 防火墙区域并放行端口
