@@ -56,6 +56,10 @@ for i in 1 2 3; do
             echo "❌ 严重错误：Feeds 更新连续失败 3 次。请检查网络！"
             exit 1
         fi
+        # 关键修复④：清除 feeds 本地缓存，解决远端 force push 后 fast-forward 失败
+        # 症状：fatal: Not possible to fast-forward, aborting.
+        echo "   → 正在清除 feeds/ 缓存目录，下次重试将重新完整拉取..."
+        rm -rf feeds/
         sleep 2
     fi
 done
