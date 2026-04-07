@@ -20,10 +20,14 @@ fi
 cd "$BASE_DIR/lede"
 
 echo -e "\n[1/5] 正在清理上一次 diy-part 造成的本地文件改动以防止代码冲突..."
-# 【魔法操作所在】：撤销本地 C 代码和配置文件的修改，移除未跟踪文件，但完美保留所有编译好的 .o 缓存文件！
+# 撤销被 git 追踪的文件改动（如 IP、主机名等修改），保留编译好的 .o 缓存
 git checkout .
-git clean -df
-rm -rf feeds package/feeds
+# 关键修复①：排除我们手动 clone 的三个第三方插件目录，防止它们被误删后触发重新编译！
+git clean -df \
+    -e package/luci-app-pushbot \
+    -e package/luci-app-aliddns \
+    -e package/luci-app-argon-config
+# 关键修复②：不再暴力删除 feeds/，保留已有 feeds 缓存，避免全量重新索引所有包
 
 echo -e "\n[2/5] 从 Lean 的官方仓库同步并强制对齐最新代码..."
 git fetch --all
@@ -65,7 +69,9 @@ fi
 
 if [ -f "$BASE_DIR/.config" ]; then
     cp "$BASE_DIR/.config" .config
-    # 清理掉可能失效的旧包依赖，生成新清单
+    # 关键修复③：注入 ccache 编译缓存选项，必须在 make defconfig 之前追加
+    echo "CONFIG_CCACHE=y" >> .config
+    # 扩展生成完整依赖清单
     make defconfig
 else
     echo "❌ 没有找到 $BASE_DIR/.config"
