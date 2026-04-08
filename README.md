@@ -9,9 +9,10 @@
 - **主力科学上网**：
   - **OpenClash**：已预置 Meta 内核，支持分流与广告过滤。
   - **SSR Plus+**：经典稳定的代理插件（带 `helloworld` 组件）。
-- **常用功能**：原生支持阿里云 DDNS、KMS 服务器激活、UPnP、微信全能推送服务 (PushBot)。
+- **常用功能**：原生支持阿里云 DDNS、KMS 服务器激活、UPnP、微信全能推送服务 (PushBot)、**OpenAppFilter (应用过滤)**。
 - **网络优化**：集成 Turbo ACC 网络加速。
 - **界面定制**：默认采用现代化的 **Argon** 主题。
+- **自动化构建**：GitHub Actions **每日凌晨 01:00 (北京时间)** 自动同步上游源码并构建。
 - **网络网段**：默认主 IP 为 `192.168.3.1`，默认密码为 `password`。
 
 ---
@@ -81,23 +82,20 @@ chmod +x *.sh
 ./update.sh
 ```
 - **增量编译极其快速**：它会读取修改后的 `.config`，保留几千个之前编译好的中间件。通常只要 **5 ~ 15 分钟**就能产出新固件！
+- **🛡️ 智能保护机制**：现已集成“脏缓存检测”。如果脚本检测到上游源码更新了内核 (Kernel) 或工具链 (Toolchain) 等核心组件，会**自动触发 `make clean`**，确保不会因为旧缓存导致编译崩溃。
 
 ---
 
-## 💿 ESXi 部署指南与踩坑说明
+## 💿 ESXi 部署指南（免转换）
 
-由于编译产生的后缀为 `.vmdk` 的固件由于本质上是 Workstation 格式 (monolithicSparse)，在 **ESXi 6.7 等系统**上直接添加硬盘会报错“磁盘大小值无效”。
+本方案已在 GitHub Actions 云端自动集成了 `qemu-img` 后处理流程。发布出的 `.vmdk` 镜像已提前转换为 ESXi 兼容的 **streamOptimized** 格式，并扩展了磁盘头描述。
 
-**如何正确在 ESXi 中安装该固件：**
-1. **方案 A（最推荐）**：下载 Windows 免费软件 **StarWind V2V Converter**：
-   - 打开软件选择编译出来的 OpenWrt 镜像（选 `.vmdk` 或 `.img` 均可）。
-   - 目标格式选择 **"VMware ESX server image"**。
-   - 顺带输入您的 ESXi IP 直接传输转换为精简置备的 ESXi 兼容格式。然后在新建虚拟机时“添加现有硬盘”即可。
-2. **方案 B（极客选择）**：将刚编译好的 `.vmdk` 上传到 ESXi 硬盘上，通过 SSH 登入 ESXi，利用原生命令转换：
-   ```bash
-   vmkfstools -i openwrt.vmdk openwrt-esxi.vmdk -d thin
-   ```
-   然后添加生成出来的 `openwrt-esxi.vmdk`。
+**如何安装：**
+1.  **直接上传**：将下载并解压得到的 `.vmdk` 文件上传到 ESXi 的存储器 (Datastore)。
+2.  **挂载硬盘**：在新建虚拟机或编辑现有虚拟机时，选择 **“添加现有硬盘”**，直接选中该文件即可。
+3.  **不再需要转换**：您不再需要使用 StarWind V2V 或磁盘转换命令，镜像开箱即用。
+
+---
 
 ---
 
@@ -131,6 +129,7 @@ chmod +x *.sh
 - ✅ 写入 `/etc/openvpn/server.conf`（端口 1194/UDP，AES-256-GCM 加密）
 - ✅ 生成 `/root/client.ovpn`（内嵌所有证书，开箱即用）
 - ✅ 自动放行防火墙端口
+- 🔐 **安全自毁机制**：生成的 `/root/client.ovpn` 文件带有 **1 小时半衰期**。首次启动 1 小时后，该配置文件将自动从路由器中删除，防止遗留风险。建议初始化后立即取走文件。
 
 ### 📥 第一步：获取客户端配置文件
 
