@@ -16,7 +16,7 @@ on:
   repository_dispatch:
   workflow_dispatch:
   schedule:
-    - cron: '0 18 * * 0'  # 每周一凌晨 02:00（北京时间），即 UTC 周日 18:00
+    - cron: '0 17 * * *'  # 每天凌晨 01:00（北京时间），即 UTC 17:00
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
@@ -134,8 +134,8 @@ jobs:
           qemu-img convert -f vmdk -O raw "$vmdk" "$raw"
           echo "Resizing to 16G..."
           qemu-img resize "$raw" 16G
-          echo "Converting back to VMDK (clean geometry)..."
-          qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse "$raw" "$vmdk"
+          echo "Converting back to VMDK (streamOptimized)..."
+          qemu-img convert -f raw -O vmdk -o subformat=streamOptimized "$raw" "$vmdk"
           rm -f "$raw"
           echo "Done: $vmdk"
         done

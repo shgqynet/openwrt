@@ -30,8 +30,27 @@ git clean -df \
 # 关键修复②：不再暴力删除 feeds/，保留已有 feeds 缓存，避免全量重新索引所有包
 
 echo -e "\n[2/5] 从 Lean 的官方仓库同步并强制对齐最新代码..."
+OLD_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 git fetch --all
 git reset --hard origin/master
+NEW_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+if [ "$OLD_HEAD" != "unknown" ] && [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+    echo -e "\n[⚡ 脏缓存检测机制 ⚡]"
+    echo "正在分析上游版本更迭是否影响了底层核心架构..."
+    # 深度匹配四座大山：工具链 / 内核架构 / C头文件宏 / 编译引导环境
+    CORE_DIFF=$(git diff --name-only $OLD_HEAD $NEW_HEAD | grep -E "^toolchain/|^target/linux/|^include/|^scripts/" || true)
+    
+    if [ -n "$CORE_DIFF" ]; then
+        echo "⚠️ 警告：检测到 Toolchain、Kernel 或底层编译框架发生了破坏性更新！"
+        echo "触发安全保护机制：自动执行 [ make clean ] 移除存在版本断层的依赖缓存..."
+        make clean
+    else
+        echo "✅ 本次上游同步为应用层/非破坏性变动，安全放行，保留重度编译缓存！"
+    fi
+else
+    echo "本地源码版本与远端一致，跳过缓存冲突分析。"
+fi
 
 echo -e "\n[2.5/5] 执行环境准备 ( diy-part1.sh ) ..."
 if [ -f "$BASE_DIR/diy-part1.sh" ]; then

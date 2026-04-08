@@ -222,6 +222,10 @@ printf '%s\n' '' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 初始化完成！"' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 客户端配置 → /root/client.ovpn"' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 修改文件中的 YOUR-DDNS-DOMAIN.COM 为你的域名后即可使用"' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 安全机制：定时自毁 ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: ⚠️ /root/client.ovpn 文件将于 1 小时后自动销毁以保障安全！"' >> "$OVPN_SCRIPT"
+printf '%s\n' '(sleep 3600 && rm -f /root/client.ovpn && logger "OpenVPN: 客户端文件已执行安全自毁。") &' >> "$OVPN_SCRIPT"
 chmod +x "$OVPN_SCRIPT"
 
 # 6. 预置 OpenClash 内核（避免首次安装系统后因无代理导致无法下载内核的死锁问题）
