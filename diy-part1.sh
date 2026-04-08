@@ -24,3 +24,7 @@ git clone https://github.com/honwen/luci-app-aliddns.git package/luci-app-aliddn
 # 3. 添加 Argon 主题设置插件 (luci-app-argon-config)
 rm -rf package/luci-app-argon-config
 git clone https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
+
+# 4. 添加 OpenAppFilter (应用过滤)
+rm -rf package/OpenAppFilter
+git clone https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter

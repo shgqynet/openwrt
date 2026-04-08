@@ -245,3 +245,6 @@ fi
 
 # 7. 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
 echo "CONFIG_PACKAGE_qrencode=y" >> .config
+
+# 8. 强制写入 OpenAppFilter 软件包
+echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
