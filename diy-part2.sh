@@ -49,14 +49,14 @@ uci set telnet.general.enable='0' 2>/dev/null || true
 # --- 自动配置 WireGuard 基础环境接口与防火墙 ---
 # 判断 wg0 接口是否存在，防止系统升级保留配置时覆盖原有密钥等数据
 if ! uci -q get network.wg0 > /dev/null; then
-	# 1. 自动生成服务端和客户端专属密钥
+	# 1. 生成服务端私钥及两个客户端密钥对
 	WG_SERVER_PRIV="$(wg genkey)"
 	WG_CLIENT_PRIV="$(wg genkey)"
-	WG_CLIENT_PUB="$(echo $WG_CLIENT_PRIV | wg pubkey)"
+	WG_CLIENT_PUB="$(echo "$WG_CLIENT_PRIV" | wg pubkey)"
 	WG_PC_PRIV="$(wg genkey)"
-	WG_PC_PUB="$(echo $WG_PC_PRIV | wg pubkey)"
+	WG_PC_PUB="$(echo "$WG_PC_PRIV" | wg pubkey)"
 
-	# 2. 建立 wg0 接口，自动注入服务端私钥
+	# 2. 建立 wg0 接口，注入服务端私钥
 	uci set network.wg0="interface"
 	uci set network.wg0.proto="wireguard"
 	uci set network.wg0.private_key="$WG_SERVER_PRIV"
@@ -64,38 +64,38 @@ if ! uci -q get network.wg0 > /dev/null; then
 	uci set network.wg0.mtu="1280"
 	uci add_list network.wg0.addresses="10.0.0.1/24"
 
-	# 3. 自动建立名为 MyPhone 的预设手机节点（分配 10.0.0.2 IP）
+	# 3. 手机节点 MyPhone（10.0.0.2），全流量走隧道
 	uci set network.wg_client_phone="wireguard_wg0"
 	uci set network.wg_client_phone.description="MyPhone"
 	uci set network.wg_client_phone.public_key="$WG_CLIENT_PUB"
-	uci set network.wg_client_phone.private_key="$WG_CLIENT_PRIV"
 	uci set network.wg_client_phone.route_allowed_ips="1"
-	uci set network.wg_client_phone.endpoint_port="51820"
 	uci set network.wg_client_phone.persistent_keepalive="25"
-	# 全流量模式：手机所有流量都走 WireGuard 隧道，经由路由器 OpenClash 出去
 	uci add_list network.wg_client_phone.allowed_ips="0.0.0.0/0"
 	uci add_list network.wg_client_phone.allowed_ips="::/0"
 
-	# 4. 自动建立名为 MyPC 的预设电脑节点（分配 10.0.0.3 IP）
+	# 4. 电脑节点 MyPC（10.0.0.3），仅隧道内网段流量
 	uci set network.wg_client_pc="wireguard_wg0"
 	uci set network.wg_client_pc.description="MyPC"
 	uci set network.wg_client_pc.public_key="$WG_PC_PUB"
-	uci set network.wg_client_pc.private_key="$WG_PC_PRIV"
 	uci set network.wg_client_pc.route_allowed_ips="1"
-	uci set network.wg_client_pc.endpoint_port="51820"
 	uci set network.wg_client_pc.persistent_keepalive="25"
 	uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
 	uci commit network
+
+	# 保存客户端私钥供人工查阅（公钥已注入 UCI，私钥需另分发给客户端）
+	mkdir -p /etc/wireguard
+	printf '%s\n' "$WG_CLIENT_PRIV" > /etc/wireguard/phone_client.key
+	printf '%s\n' "$WG_PC_PRIV"     > /etc/wireguard/pc_client.key
+	chmod 600 /etc/wireguard/phone_client.key /etc/wireguard/pc_client.key
 fi
 
 if ! uci -q get firewall.wg > /dev/null; then
-	# 5. 建立 WireGuard 防火墙区域并放行端口
+	# 5. 建立 WireGuard 防火墙区域（不开 masq，由 lan zone 负责 NAT）
 	uci set firewall.wg="zone"
 	uci set firewall.wg.name="wireguard"
 	uci set firewall.wg.input="ACCEPT"
 	uci set firewall.wg.output="ACCEPT"
 	uci set firewall.wg.forward="ACCEPT"
-	uci set firewall.wg.masq="1"
 	uci add_list firewall.wg.network="wg0"
 
 	# WAN 口放行 51820 UDP 端口
@@ -110,7 +110,7 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.wg_lan_forward="forwarding"
 	uci set firewall.wg_lan_forward.src="wireguard"
 	uci set firewall.wg_lan_forward.dest="lan"
-	
+
 	uci set firewall.lan_wg_forward="forwarding"
 	uci set firewall.lan_wg_forward.src="lan"
 	uci set firewall.lan_wg_forward.dest="wireguard"
@@ -123,121 +123,121 @@ chmod +x "$uci_dir/99-custom-settings"
 
 # 8. 预置 OpenVPN 服务端自动初始化脚本
 # 原理：固件首次启动时自动生成 CA + 证书 + server.conf + client.ovpn
-# 无需第三方插件，openssl 已随 openvpn-openssl 一同打包进固件
-cat > "$uci_dir/98-openvpn-setup" << 'OVPNEOF'
-#!/bin/sh
-# OpenVPN 服务端首次启动自动初始化
+# 用 printf 逐行写入，避免嵌套 heredoc 在 bash 解析时引发歧义
+OVPN_SCRIPT="$uci_dir/98-openvpn-setup"
 
-# 已初始化过则跳过
-[ -f /etc/openvpn/keys/ca.crt ] && exit 0
+printf '%s\n' '#!/bin/sh' > "$OVPN_SCRIPT"
+printf '%s\n' '# OpenVPN 服务端首次启动自动初始化' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# 已初始化过则跳过' >> "$OVPN_SCRIPT"
+printf '%s\n' '[ -f /etc/openvpn/keys/ca.crt ] && exit 0' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: 首次运行，开始自动生成证书（约需 30 秒）..."' >> "$OVPN_SCRIPT"
+printf '%s\n' 'mkdir -p /etc/openvpn/keys' >> "$OVPN_SCRIPT"
+printf '%s\n' 'chmod 700 /etc/openvpn/keys' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 生成 CA ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl req -new -x509 -days 3650 \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -key /etc/openvpn/keys/ca.key \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -out /etc/openvpn/keys/ca.crt \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -subj "/CN=MyRouter-CA" 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 生成服务端证书 ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl req -new -key /etc/openvpn/keys/server.key \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -out /etc/openvpn/keys/server.csr -subj "/CN=MyRouter-Server" 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl x509 -req -days 3650 \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -in /etc/openvpn/keys/server.csr \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -CA /etc/openvpn/keys/ca.crt \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -CAkey /etc/openvpn/keys/ca.key \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -CAcreateserial -out /etc/openvpn/keys/server.crt 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 生成客户端证书 ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl req -new -key /etc/openvpn/keys/client.key \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -out /etc/openvpn/keys/client.csr -subj "/CN=MyPhone-Client" 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openssl x509 -req -days 3650 \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -in /etc/openvpn/keys/client.csr \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -CA /etc/openvpn/keys/ca.crt \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -CAkey /etc/openvpn/keys/ca.key \' >> "$OVPN_SCRIPT"
+printf '%s\n' '    -CAcreateserial -out /etc/openvpn/keys/client.crt 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- TLS-Auth key（防暴力破解攻击）---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 服务端配置文件 ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'cat > /etc/openvpn/server.conf << CONEOF' >> "$OVPN_SCRIPT"
+printf '%s\n' 'port 1194' >> "$OVPN_SCRIPT"
+printf '%s\n' 'proto udp' >> "$OVPN_SCRIPT"
+printf '%s\n' 'dev tun' >> "$OVPN_SCRIPT"
+printf '%s\n' 'ca /etc/openvpn/keys/ca.crt' >> "$OVPN_SCRIPT"
+printf '%s\n' 'cert /etc/openvpn/keys/server.crt' >> "$OVPN_SCRIPT"
+printf '%s\n' 'key /etc/openvpn/keys/server.key' >> "$OVPN_SCRIPT"
+printf '%s\n' 'dh none' >> "$OVPN_SCRIPT"
+printf '%s\n' 'ecdh-curve prime256v1' >> "$OVPN_SCRIPT"
+printf '%s\n' 'tls-auth /etc/openvpn/keys/ta.key 0' >> "$OVPN_SCRIPT"
+printf '%s\n' 'cipher AES-256-GCM' >> "$OVPN_SCRIPT"
+printf '%s\n' 'auth SHA256' >> "$OVPN_SCRIPT"
+printf '%s\n' 'server 10.8.0.0 255.255.255.0' >> "$OVPN_SCRIPT"
+printf '%s\n' 'push "redirect-gateway def1 bypass-dhcp"' >> "$OVPN_SCRIPT"
+printf '%s\n' 'push "dhcp-option DNS 192.168.3.1"' >> "$OVPN_SCRIPT"
+printf '%s\n' 'keepalive 10 120' >> "$OVPN_SCRIPT"
+printf '%s\n' 'persist-key' >> "$OVPN_SCRIPT"
+printf '%s\n' 'persist-tun' >> "$OVPN_SCRIPT"
+printf '%s\n' 'status /tmp/openvpn-status.log' >> "$OVPN_SCRIPT"
+printf '%s\n' 'verb 3' >> "$OVPN_SCRIPT"
+printf '%s\n' 'CONEOF' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 注册 UCI 服务实例 ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'uci set openvpn.server=openvpn' >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set openvpn.server.enabled='1'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set openvpn.server.config='/etc/openvpn/server.conf'" >> "$OVPN_SCRIPT"
+printf '%s\n' 'uci commit openvpn' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 防火墙放行 1194/UDP ---' >> "$OVPN_SCRIPT"
+printf '%s\n' 'uci set firewall.openvpn=rule' >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn.name='Allow-OpenVPN'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn.src='wan'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn.dest_port='1194'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn.proto='udp'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn.target='ACCEPT'" >> "$OVPN_SCRIPT"
+printf '%s\n' 'uci commit firewall' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 生成内嵌所有证书的 client.ovpn ---' >> "$OVPN_SCRIPT"
+printf '%s\n' '{' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "client\ndev tun\nproto udp\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "remote YOUR-DDNS-DOMAIN.COM 1194\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "resolv-retry infinite\nnobind\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "persist-key\npersist-tun\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "cipher AES-256-GCM\nauth SHA256\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "key-direction 1\nverb 3\n\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "<cert>\n"; openssl x509 -in /etc/openvpn/keys/client.crt; printf "</cert>\n\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '  printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"' >> "$OVPN_SCRIPT"
+printf '%s\n' '} > /root/client.ovpn' >> "$OVPN_SCRIPT"
+printf '%s\n' 'chmod 600 /root/client.ovpn' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: 初始化完成！"' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: 客户端配置 → /root/client.ovpn"' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: 修改文件中的 YOUR-DDNS-DOMAIN.COM 为你的域名后即可使用"' >> "$OVPN_SCRIPT"
+chmod +x "$OVPN_SCRIPT"
 
-logger "OpenVPN: 首次运行，开始自动生成证书（约需 30 秒）..."
-mkdir -p /etc/openvpn/keys
-chmod 700 /etc/openvpn/keys
-
-# --- 生成 CA ---
-openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null
-openssl req -new -x509 -days 3650 \
-    -key /etc/openvpn/keys/ca.key \
-    -out /etc/openvpn/keys/ca.crt \
-    -subj "/CN=MyRouter-CA" 2>/dev/null
-
-# --- 生成服务端证书 ---
-openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null
-openssl req -new -key /etc/openvpn/keys/server.key \
-    -out /etc/openvpn/keys/server.csr -subj "/CN=MyRouter-Server" 2>/dev/null
-openssl x509 -req -days 3650 \
-    -in /etc/openvpn/keys/server.csr \
-    -CA /etc/openvpn/keys/ca.crt \
-    -CAkey /etc/openvpn/keys/ca.key \
-    -CAcreateserial -out /etc/openvpn/keys/server.crt 2>/dev/null
-
-# --- 生成客户端证书 ---
-openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null
-openssl req -new -key /etc/openvpn/keys/client.key \
-    -out /etc/openvpn/keys/client.csr -subj "/CN=MyPhone-Client" 2>/dev/null
-openssl x509 -req -days 3650 \
-    -in /etc/openvpn/keys/client.csr \
-    -CA /etc/openvpn/keys/ca.crt \
-    -CAkey /etc/openvpn/keys/ca.key \
-    -CAcreateserial -out /etc/openvpn/keys/client.crt 2>/dev/null
-
-# --- TLS-Auth key（防暴力破解攻击）---
-openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
-
-# --- 服务端配置文件 ---
-cat > /etc/openvpn/server.conf << 'CONEOF'
-port 1194
-proto udp
-dev tun
-ca /etc/openvpn/keys/ca.crt
-cert /etc/openvpn/keys/server.crt
-key /etc/openvpn/keys/server.key
-dh none
-ecdh-curve prime256v1
-tls-auth /etc/openvpn/keys/ta.key 0
-cipher AES-256-GCM
-auth SHA256
-server 10.8.0.0 255.255.255.0
-push "redirect-gateway def1 bypass-dhcp"
-push "dhcp-option DNS 192.168.3.1"
-keepalive 10 120
-persist-key
-persist-tun
-status /tmp/openvpn-status.log
-verb 3
-CONEOF
-
-# --- 注册 UCI 服务实例 ---
-uci set openvpn.server=openvpn
-uci set openvpn.server.enabled='1'
-uci set openvpn.server.config='/etc/openvpn/server.conf'
-uci commit openvpn
-
-# --- 防火墙放行 1194/UDP ---
-uci set firewall.openvpn=rule
-uci set firewall.openvpn.name='Allow-OpenVPN'
-uci set firewall.openvpn.src='wan'
-uci set firewall.openvpn.dest_port='1194'
-uci set firewall.openvpn.proto='udp'
-uci set firewall.openvpn.target='ACCEPT'
-uci commit firewall
-
-# --- 生成内嵌所有证书的 client.ovpn ---
-# remote 行先写占位符，用户改成自己的 DDNS 域名即可
-{
-  printf "client\ndev tun\nproto udp\n"
-  printf "remote YOUR-DDNS-DOMAIN.COM 1194\n"
-  printf "resolv-retry infinite\nnobind\n"
-  printf "persist-key\npersist-tun\n"
-  printf "cipher AES-256-GCM\nauth SHA256\n"
-  printf "key-direction 1\nverb 3\n\n"
-  printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"
-  printf "<cert>\n"; openssl x509 -in /etc/openvpn/keys/client.crt; printf "</cert>\n\n"
-  printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"
-  printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"
-} > /root/client.ovpn
-chmod 600 /root/client.ovpn
-
-logger "OpenVPN: 初始化完成！"
-logger "OpenVPN: 客户端配置 → /root/client.ovpn"
-logger "OpenVPN: 修改文件中的 YOUR-DDNS-DOMAIN.COM 为你的域名后即可使用"
-OVPNEOF
-chmod +x "$uci_dir/98-openvpn-setup"
-
-# 6. 预置 OpenClash 内核（极致优化体验）
-# 避免首次安装系统后因无代理导致无法从 GitHub 下载内核的死锁问题（鸡和蛋的问题）
+# 6. 预置 OpenClash 内核（避免首次安装系统后因无代理导致无法下载内核的死锁问题）
 CORE_DIR="package/base-files/files/etc/openclash/core"
 mkdir -p "$CORE_DIR"
 
 echo "Downloading OpenClash cores..."
-
-# 下载 Meta 内核 (目前只用 Meta 内核即可，Dev 内核仓库路径已失效)
-curl -sL https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64.tar.gz | tar xzvC "$CORE_DIR"
-mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta"
-chmod +x "$CORE_DIR/clash_meta"
-echo "OpenClash cores downloaded successfully!"
+if curl -sL --connect-timeout 60 \
+    https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64.tar.gz \
+    | tar xzvC "$CORE_DIR"; then
+    mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta" 2>/dev/null || true
+    chmod +x "$CORE_DIR/clash_meta"
+    echo "OpenClash core downloaded successfully!"
+else
+    echo "WARNING: OpenClash core download failed, will be downloaded at first boot."
+fi
 
 # 7. 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
 echo "CONFIG_PACKAGE_qrencode=y" >> .config
-
