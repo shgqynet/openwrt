@@ -16,7 +16,7 @@ on:
   repository_dispatch:
   workflow_dispatch:
   schedule:
-    - cron: '0 17 * * *'  # 每天凌晨 01:00（北京时间），即 UTC 17:00
+    - cron: '0 18 * * *'  # 每天凌晨 02:00（北京时间），即 UTC 18:00
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
