@@ -35,6 +35,12 @@ cat > "$uci_dir/97-auto-network" << 'EOF'
 #!/bin/sh
 # 首次启动时自动识别并绑定多网卡
 
+# 【安全判断】如果是升级且“保留配置”，则跳过网卡分配，避免覆盖用户自定义的网口、VLAN或链路聚合等高级设置
+if [ "$(uci -q get network.globals.auto_inited)" = "1" ]; then
+    logger -t "auto-network" "Retained settings detected. Skipping auto-network configuration."
+    exit 0
+fi
+
 interfaces=$(ls -d /sys/class/net/eth* 2>/dev/null | awk -F '/' '{print $5}' | sort)
 lan_ports=""
 wan_port=""
@@ -99,6 +105,9 @@ else
     uci delete network.wan6 2>/dev/null || true
 fi
 
+# 写入初始化标志位，后续升级只要保留了配置，就不会再次执行覆盖
+uci set network.globals='globals' 2>/dev/null || true
+uci set network.globals.auto_inited='1'
 uci commit network
 logger -t "auto-network" "Network configured. LAN: $lan_ports, WAN: ${wan_port:-none}"
 EOF
