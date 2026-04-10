@@ -134,21 +134,18 @@ chmod +x *.sh
 
 ### 📥 第一步：获取客户端配置文件
 
-**方法一：SCP 下载（推荐，一条命令搞定）**
+
+**方法一：WEB页面直接下载**
+
+登录openwrt，在 系统---文件传输---下载到本地--输入 /root/client.ovpn，直接下载。
+
+**方法二：SCP 下载**
 
 在 Windows PowerShell 或 Mac 终端执行：
 ```bash
 scp root@192.168.3.1:/root/client.ovpn ./client.ovpn
 ```
 文件会下载到当前目录。
-
-**方法二：SSH 复制粘贴**
-
-SSH 进路由器后执行：
-```bash
-cat /root/client.ovpn
-```
-将全部输出内容复制，在本地新建一个空白 `.ovpn` 文件粘贴保存。
 
 ### ✏️ 第二步：修改域名（唯一需要手动做的事）
 
