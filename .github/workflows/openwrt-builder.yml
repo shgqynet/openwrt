@@ -129,15 +129,20 @@ jobs:
       if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
         find openwrt/bin/targets/ -name "*.vmdk" | while read vmdk; do
-          raw="${vmdk%.vmdk}.raw"
+          dir="$(dirname "$vmdk")"
+          base="$(basename "$vmdk" .vmdk)"
+          raw="${dir}/${base}.raw"
+          out="${dir}/${base}-esxi.vmdk"
           echo "Converting $vmdk → raw..."
           qemu-img convert -f vmdk -O raw "$vmdk" "$raw"
           echo "Resizing to 16G..."
           qemu-img resize "$raw" 16G
-          echo "Converting back to VMDK (streamOptimized)..."
-          qemu-img convert -f raw -O vmdk -o subformat=streamOptimized "$raw" "$vmdk"
+          echo "Converting to VMDK (monolithicSparse) for ESXi datastore..."
+          qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse "$raw" "$out"
           rm -f "$raw"
-          echo "Done: $vmdk"
+          # 替换原文件
+          mv "$out" "$vmdk"
+          echo "Done: $vmdk (monolithicSparse, 16G)"
         done
 
     - name: Organize files
