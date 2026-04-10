@@ -290,29 +290,62 @@ printf '%s\n' "uci set firewall.openvpn.proto='udp'" >> "$OVPN_SCRIPT"
 printf '%s\n' "uci set firewall.openvpn.target='ACCEPT'" >> "$OVPN_SCRIPT"
 printf '%s\n' 'uci commit firewall' >> "$OVPN_SCRIPT"
 printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 生成内嵌所有证书的 client.ovpn ---' >> "$OVPN_SCRIPT"
-printf '%s\n' '{' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "client\ndev tun\nproto udp\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "remote YOUR-DDNS-DOMAIN.COM 1194\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "resolv-retry infinite\nnobind\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "persist-key\npersist-tun\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "cipher AES-256-GCM\nauth SHA256\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "key-direction 1\nverb 3\n\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "<cert>\n"; openssl x509 -in /etc/openvpn/keys/client.crt; printf "</cert>\n\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '  printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"' >> "$OVPN_SCRIPT"
-printf '%s\n' '} > /root/client.ovpn' >> "$OVPN_SCRIPT"
-printf '%s\n' 'chmod 600 /root/client.ovpn' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: 初始化完成！"' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: 客户端配置 → /root/client.ovpn"' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: 修改文件中的 YOUR-DDNS-DOMAIN.COM 为你的域名后即可使用"' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 安全机制：定时自毁 ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: ⚠️ /root/client.ovpn 文件将于 1 小时后自动销毁以保障安全！"' >> "$OVPN_SCRIPT"
-printf '%s\n' '(sleep 3600 && rm -f /root/client.ovpn && logger "OpenVPN: 客户端文件已执行安全自毁。") &' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: 初始化完毕！"' >> "$OVPN_SCRIPT"
+printf '%s\n' 'logger "OpenVPN: 请在路由器 Web 界面【服务】->【OpenVPN 客户端配置下载】中直接获取配置文件。"' >> "$OVPN_SCRIPT"
 chmod +x "$OVPN_SCRIPT"
+
+# --- 提供 Web UI (LuCI) 一键下载 OpenVPN 配置文件的功能 ---
+# 1. 核心生成脚本
+mkdir -p package/base-files/files/bin
+cat > package/base-files/files/bin/gen-ovpn-client << 'EOF'
+#!/bin/sh
+if [ ! -f /etc/openvpn/keys/ca.crt ]; then
+    exit 1
+fi
+
+printf "client\ndev tun\nproto udp\n"
+printf "remote YOUR-DDNS-DOMAIN.COM 1194\n"
+printf "resolv-retry infinite\nnobind\n"
+printf "persist-key\npersist-tun\n"
+printf "cipher AES-256-GCM\nauth SHA256\n"
+printf "key-direction 1\nverb 3\n\n"
+printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"
+printf "<cert>\n"; openssl x509 -in /etc/openvpn/keys/client.crt; printf "</cert>\n\n"
+printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"
+printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"
+EOF
+chmod +x package/base-files/files/bin/gen-ovpn-client
+
+# 2. LuCI Web 界面入口
+mkdir -p package/base-files/files/usr/lib/lua/luci/controller
+cat > package/base-files/files/usr/lib/lua/luci/controller/openvpn_dl.lua << 'EOF'
+module("luci.controller.openvpn_dl", package.seeall)
+
+function index()
+    -- 挂载在 Web 后台“服务(Services)”菜单下
+    entry({"admin", "services", "openvpn_dl"}, call("action_download"), "OpenVPN 客户端配置下载", 99).dependent = true
+end
+
+function action_download()
+    local fp = io.popen("/bin/gen-ovpn-client 2>/dev/null")
+    if not fp then
+        luci.http.status(500, "Internal Server Error")
+        return
+    end
+    local content = fp:read("*a")
+    fp:close()
+    
+    if content == nil or content == "" then
+        luci.http.prepare_content("text/plain; charset=utf-8")
+        luci.http.write("证书尚未生成或发生错误，请等待系统首次开机初始化几分钟后再试。")
+        return
+    end
+
+    luci.http.prepare_content("application/x-openvpn-profile")
+    luci.http.header("Content-Disposition", "attachment; filename=\"client.ovpn\"")
+    luci.http.write(content)
+end
+EOF
 
 # 6. 预置 OpenClash 内核（避免首次安装系统后因无代理导致无法下载内核的死锁问题）
 CORE_DIR="package/base-files/files/etc/openclash/core"
