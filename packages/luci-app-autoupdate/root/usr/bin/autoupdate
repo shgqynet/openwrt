@@ -22,11 +22,27 @@ get_cfg() {
 }
 
 # 读取本地版本号（由编译脚本写入 DISTRIB_REVISION）
+# 将 vR26.02.20 或 v2026.04.11 统一标准化为 YYYY.MM.DD
+normalize_version() {
+    local v
+    # 去掉头部 v/V/r/R 前缀
+    v=$(echo "$1" | sed 's/^[vV]//; s/^[rR]//')
+    # 只取第一段（去掉 -HHMM 后缀）
+    v=$(echo "$v" | cut -d'-' -f1)
+    # 如果年份是 2 位（如 26.02.20），补全为当前世纪（2000+）
+    local year
+    year=$(echo "$v" | cut -d'.' -f1)
+    if [ ${#year} -le 2 ]; then
+        v="20${v}"
+    fi
+    echo "$v"
+}
+
 get_local_version() {
-    local ver
-    ver=$(grep '^DISTRIB_REVISION=' /etc/openwrt_release 2>/dev/null \
-          | cut -d"'" -f2 | sed 's/^v//')
-    echo "${ver:-0000.00.00}"
+    local raw
+    raw=$(grep '^DISTRIB_REVISION=' /etc/openwrt_release 2>/dev/null \
+          | cut -d"'" -f2)
+    normalize_version "${raw:-0000.00.00}"
 }
 
 # 构造最终请求 URL（按需拼接镜像前缀）
@@ -59,12 +75,12 @@ fetch_release_json() {
 }
 
 # 版本比较：云端版本 > 本地版本 时返回 0（真）
-# 版本格式：YYYY.MM.DD 或 YYYY.MM.DD-HHMM
+# 支持 vR26.02.20 、v2026.04.11 、2026.04.11-1835 等多种格式
 version_is_newer() {
     local cloud local_ver
-    cloud=$(echo "$1" | sed 's/^v//' | cut -d'-' -f1)
-    local_ver=$(echo "$2" | sed 's/^v//' | cut -d'-' -f1)
-    # 纯字典序比较日期字符串即可（格式一致时有效）
+    cloud=$(normalize_version "$1")
+    local_ver=$(normalize_version "$2")
+    # 纯字典序比较日期字符串（两端均为 YYYY.MM.DD 格式时有效）
     [ "$cloud" \> "$local_ver" ]
 }
 
