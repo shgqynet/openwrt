@@ -250,17 +250,11 @@
 
     <!-- 操作按钮 -->
     <div class="au-btn-row">
-        <button class="au-btn au-btn-success" id="btn-download" onclick="doDownload()" disabled>
-            ⬇️ 下载固件
-        </button>
-        <button class="au-btn au-btn-primary" id="btn-verify" onclick="doVerify()" disabled>
-            ✅ 校验哈希
-        </button>
         <label style="display:flex;align-items:center;gap:6px;font-size:0.85em;cursor:pointer;">
             <input type="checkbox" id="keep-config" checked>
             <span>保留路由器配置</span>
         </label>
-        <button class="au-btn au-btn-danger" id="btn-upgrade" onclick="doUpgrade()" disabled>
+        <button class="au-btn au-btn-danger" id="btn-upgrade" onclick="doAutoUpgrade()" disabled>
             🚀 立即升级
         </button>
     </div>
@@ -412,9 +406,7 @@ function doCheck() {
                 panel.style.display = "";
                 document.getElementById("asset-name").textContent = data.asset_name || "(未找到匹配固件)";
                 setStepState(1, ""); setStepState(2, ""); setStepState(3, "");
-                btn("btn-download", !!data.asset_url);
-                btn("btn-verify", false);
-                btn("btn-upgrade", false);
+                btn("btn-upgrade", !!data.asset_url);
                 document.getElementById("log-box").textContent = "";
                 document.getElementById("log-box").classList.remove("show");
                 bannerHide("banner-upgrade");
@@ -440,14 +432,22 @@ function doCheck() {
     );
 }
 
-// ─── 步骤2：下载固件 ───
-function doDownload() {
+// ─── 一键升级流程（下载 -> 校验 -> 升级） ───
+function doAutoUpgrade() {
     if (!_assetUrl) { banner("banner-upgrade", "error", "❌ 无有效的固件下载地址"); return; }
-    btn("btn-download", false);
-    btn("btn-verify", false);
+    
+    var keep = document.getElementById("keep-config").checked ? "1" : "0";
+    var warn = keep === "1"
+        ? "即将自动下载并升级固件，设备将自动重启，您的配置将被保留。是否继续？"
+        : "⚠️ 警告：您选择了【不保留配置】，升级后所有设置将被清空（包括 WiFi 密码、VPN 等），确认继续吗？";
+
+    if (!confirm(warn)) return;
+
     btn("btn-upgrade", false);
-    setStepState(1, "active");
     bannerHide("banner-upgrade");
+    
+    // 步骤1：下载
+    setStepState(1, "active");
     log("开始下载固件…");
     log("URL: " + _assetUrl);
 
@@ -460,79 +460,59 @@ function doDownload() {
                 var msg = err || data.error;
                 banner("banner-upgrade", "error", "❌ 下载失败：" + msg);
                 log("下载失败：" + msg);
-                btn("btn-download", true);
+                btn("btn-upgrade", true);
                 return;
             }
             var mb = (data.size / 1048576).toFixed(2);
             log("下载完成！大小：" + mb + " MB");
             setStepState(1, "done");
-            btn("btn-verify", true);
-            banner("banner-upgrade", "info", "✅ 固件下载完成（" + mb + " MB），请点击「校验哈希」验证文件完整性。");
+            
+            // 步骤2：校验
+            setStepState(2, "active");
+            log("正在校验 SHA256…");
+            fetchJson(
+                "<%=luci.dispatcher.build_url("admin","system","autoupdate","verify")%>",
+                "sha256_url=" + encodeURIComponent(_sha256Url),
+                function(err, data) {
+                    if (err || data.error) {
+                        setStepState(2, "error");
+                        var msg = err || data.error;
+                        banner("banner-upgrade", "error", "❌ 校验失败：" + msg);
+                        log("校验失败：" + msg);
+                        btn("btn-upgrade", true);
+                        return;
+                    }
+                    log("SHA256: " + data.sha256);
+                    if (data.note) log("提示：" + data.note);
+                    setStepState(2, "done");
+                    
+                    // 步骤3：升级
+                    setStepState(3, "active");
+                    log("验证通过！发送升级指令，保留配置：" + (keep==="1" ? "是" : "否"));
+                    fetchJson(
+                        "<%=luci.dispatcher.build_url("admin","system","autoupdate","upgrade")%>",
+                        "keep=" + keep,
+                        function(err, data) {
+                            if (err || (data && data.error)) {
+                                setStepState(3, "error");
+                                var msg = err || data.error;
+                                banner("banner-upgrade", "error", "❌ 升级失败：" + msg);
+                                log("升级失败：" + msg);
+                                btn("btn-upgrade", true);
+                                return;
+                            }
+                            setStepState(3, "done");
+                            log("升级指令已发送，设备正在重启…");
+                            banner("banner-upgrade", "warning",
+                                "🚀 升级指令已发送！设备将在数秒后自动重启，请等待 1~3 分钟后刷新页面。");
+                        }
+                    );
+                }
+            );
         }
     );
 }
 
-// ─── 步骤3：SHA256 校验 ───
-function doVerify() {
-    btn("btn-verify", false);
-    setStepState(2, "active");
-    bannerHide("banner-upgrade");
-    log("正在校验 SHA256…");
-
-    fetchJson(
-        "<%=luci.dispatcher.build_url("admin","system","autoupdate","verify")%>",
-        "sha256_url=" + encodeURIComponent(_sha256Url),
-        function(err, data) {
-            if (err || data.error) {
-                setStepState(2, "error");
-                var msg = err || data.error;
-                banner("banner-upgrade", "error", "❌ 校验失败：" + msg);
-                log("校验失败：" + msg);
-                return;
-            }
-            log("SHA256: " + data.sha256);
-            if (data.note) log("提示：" + data.note);
-            setStepState(2, "done");
-            btn("btn-upgrade", true);
-            banner("banner-upgrade", "success",
-                "✅ 文件完整性验证通过！SHA256: " + data.sha256.substring(0, 16) + "… 可以安全升级。");
-        }
-    );
-}
-
-// ─── 步骤4：执行升级 ───
-function doUpgrade() {
-    var keep = document.getElementById("keep-config").checked ? "1" : "0";
-    var warn = keep === "1"
-        ? "即将执行固件升级，设备将自动重启，您的配置将被保留。是否继续？"
-        : "⚠️ 警告：您选择了【不保留配置】，升级后所有设置将被清空（包括 WiFi 密码、VPN 等），确认继续吗？";
-
-    if (!confirm(warn)) return;
-
-    btn("btn-upgrade", false);
-    setStepState(3, "active");
-    bannerHide("banner-upgrade");
-    log("发送升级指令，保留配置：" + (keep==="1" ? "是" : "否"));
-
-    fetchJson(
-        "<%=luci.dispatcher.build_url("admin","system","autoupdate","upgrade")%>",
-        "keep=" + keep,
-        function(err, data) {
-            if (err || (data && data.error)) {
-                setStepState(3, "error");
-                var msg = err || data.error;
-                banner("banner-upgrade", "error", "❌ 升级失败：" + msg);
-                log("升级失败：" + msg);
-                btn("btn-upgrade", true);
-                return;
-            }
-            setStepState(3, "done");
-            log("升级指令已发送，设备正在重启…");
-            banner("banner-upgrade", "warning",
-                "🚀 升级指令已发送！设备将在数秒后自动重启，请等待 1~3 分钟后刷新页面。");
-        }
-    );
-}
 
 // ─── 保存设置 ───
 function doSave() {
