@@ -176,8 +176,7 @@ if ! uci -q get network.wg0 > /dev/null; then
 	uci set network.wg_client_phone.public_key="$WG_CLIENT_PUB"
 	uci set network.wg_client_phone.route_allowed_ips="1"
 	uci set network.wg_client_phone.persistent_keepalive="25"
-	uci add_list network.wg_client_phone.allowed_ips="0.0.0.0/0"
-	uci add_list network.wg_client_phone.allowed_ips="::/0"
+	uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
 
 	# 4. 电脑节点 MyPC（10.0.0.3），仅隧道内网段流量
 	uci set network.wg_client_pc="wireguard_wg0"
