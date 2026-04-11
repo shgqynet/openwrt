@@ -4,7 +4,7 @@ config autoupdate 'config'
 
 	# 固件资产关键词（用于筛选 Release 附件中的升级包）
 	# 通常填 'sysupgrade'，会自动排除 factory.bin
-	option firmware_tag 'sysupgrade'
+	option firmware_tag 'combined-efi.img.gz'
 
 	# 升级时是否保留路由器配置（1=保留, 0=全新安装）
 	option keep_config '1'

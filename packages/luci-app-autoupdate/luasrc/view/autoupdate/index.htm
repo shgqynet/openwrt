@@ -363,7 +363,7 @@ window.addEventListener("DOMContentLoaded", function() {
     fetchJson("<%=luci.dispatcher.build_url("admin","system","autoupdate","check")%>",
         null, function(err, data) {
             if (!err && data && data.local) {
-                document.getElementById("ver-local").textContent = "v" + data.local;
+                document.getElementById("ver-local").textContent = data.local;
             }
         }
     );

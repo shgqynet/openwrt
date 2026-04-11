@@ -27,8 +27,6 @@ normalize_version() {
     local v
     # 去掉头部 v/V/r/R 前缀
     v=$(echo "$1" | sed 's/^[vV]//; s/^[rR]//')
-    # 只取第一段（去掉 -HHMM 后缀）
-    v=$(echo "$v" | cut -d'-' -f1)
     # 如果年份是 2 位（如 26.02.20），补全为当前世纪（2000+）
     local year
     year=$(echo "$v" | cut -d'.' -f1)
@@ -130,7 +128,7 @@ cmd_check() {
 
     log "检查完成 | 本地: v${local_ver} | 云端: ${cloud_tag} | 有更新: ${has_update}"
 
-    printf '{"local":"v%s","cloud":"%s","has_update":%d,"asset_name":"%s","asset_url":"%s","sha256_url":"%s","body":"%s"}\n' \
+    printf '{"local":"%s","cloud":"%s","has_update":%d,"asset_name":"%s","asset_url":"%s","sha256_url":"%s","body":"%s"}\n' \
         "$local_ver" "$cloud_tag" "$has_update" \
         "${asset_name:-}" "${asset_url:-}" "${asset_sha256:-}" \
         "$release_body"
