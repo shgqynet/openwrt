@@ -219,7 +219,19 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.lan_wg_forward="forwarding"
 	uci set firewall.lan_wg_forward.src="lan"
 	uci set firewall.lan_wg_forward.dest="wireguard"
+	
+	# 新增：针对 fw4 (OpenWrt 22.03+) 配置 SNAT 伪装，解决 VPN 客户端无法访问局域网其他设备的问题
+	# 原因是局域网设备（如 Windows）的防火墙通常会丢弃来自非本网段 (10.0.0.x) 的请求
+	uci set firewall.wg_lan_masq="nat"
+	uci set firewall.wg_lan_masq.name="wg-to-lan"
+	uci set firewall.wg_lan_masq.src="wireguard"
+	uci set firewall.wg_lan_masq.dest="lan"
+	uci set firewall.wg_lan_masq.target="MASQUERADE"
+	
 	uci commit firewall
+
+	# 写入防火墙自定义规则，作为老版本 fw3 (iptables) 的兼容后备方案
+	grep -q "10.0.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
 fi
 
 exit 0
@@ -308,6 +320,15 @@ printf '%s\n' "uci set firewall.openvpn.dest_port='1194'" >> "$OVPN_SCRIPT"
 printf '%s\n' "uci set firewall.openvpn.proto='udp'" >> "$OVPN_SCRIPT"
 printf '%s\n' "uci set firewall.openvpn.target='ACCEPT'" >> "$OVPN_SCRIPT"
 printf '%s\n' 'uci commit firewall' >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 添加 OpenVPN 转发和伪装规则 ---' >> "$OVPN_SCRIPT"
+printf '%s\n' '# 允许 tun 接口转发，并进行 SNAT 伪装，保证客户端能访问局域网设备' >> "$OVPN_SCRIPT"
+printf '%s\n' 'grep -q "10.8.0.0/24" /etc/firewall.user 2>/dev/null || {' >> "$OVPN_SCRIPT"
+printf '%s\n' '    echo "iptables -I FORWARD -i tun+ -j ACCEPT" >> /etc/firewall.user' >> "$OVPN_SCRIPT"
+printf '%s\n' '    echo "iptables -I FORWARD -o tun+ -j ACCEPT" >> /etc/firewall.user' >> "$OVPN_SCRIPT"
+printf '%s\n' '    echo "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user' >> "$OVPN_SCRIPT"
+printf '%s\n' '    fw3 restart 2>/dev/null || /etc/init.d/firewall restart 2>/dev/null' >> "$OVPN_SCRIPT"
+printf '%s\n' '}' >> "$OVPN_SCRIPT"
 printf '%s\n' '' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 初始化完毕！"' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 请在路由器 Web 界面【服务】->【OpenVPN 客户端配置下载】中直接获取配置文件。"' >> "$OVPN_SCRIPT"
