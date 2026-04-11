@@ -18,11 +18,14 @@ sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generat
 # 2. 修改默认主机名
 sed -i 's/OpenWrt/MyOpenWrt/g' package/base-files/files/bin/config_generate
 
-# 3. 启用 BBR TCP 拥塞控制 + FQ 队列调度（x86 内核 >= 4.9 均支持）
+# 3. 启用 BBR TCP 拥塞控制 + FQ 队列调度，并彻底全局禁用 IPv6
 mkdir -p package/base-files/files/etc/sysctl.d
 cat > package/base-files/files/etc/sysctl.d/10-bbr.conf << 'EOF'
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
 EOF
 
 # 4. 提高系统连接数上限（适合高负载 x86 路由场景）
@@ -105,8 +108,8 @@ if [ -n "$wan_port" ]; then
     uci delete network.wan.ifname 2>/dev/null
     uci set network.wan.device="$wan_port" 2>/dev/null || uci set network.wan.ifname="$wan_port"
     
-    uci delete network.wan6.ifname 2>/dev/null
-    uci set network.wan6.device="$wan_port" 2>/dev/null || uci set network.wan6.ifname="$wan_port"
+    # 删除默认出现的 wan6 接口
+    uci delete network.wan6 2>/dev/null || true
 else
     # 单网口时无 WAN
     uci delete network.wan 2>/dev/null || true
@@ -139,6 +142,15 @@ uci commit luci
 
 # 关闭 Telnet（安全加固）
 uci set telnet.general.enable='0' 2>/dev/null || true
+
+# 彻底禁用网络配置中的 IPv6 (DHCPv6/RA/ULA 等)
+uci delete network.wan6 2>/dev/null || true
+uci set network.globals.ula_prefix=''
+uci set dhcp.lan.ra='disabled'
+uci set dhcp.lan.dhcpv6='disabled'
+uci set dhcp.lan.ra_slaac='0'
+uci commit dhcp
+uci commit network
 
 # --- 自动配置 WireGuard 基础环境接口与防火墙 ---
 # 判断 wg0 接口是否存在，防止系统升级保留配置时覆盖原有密钥等数据
