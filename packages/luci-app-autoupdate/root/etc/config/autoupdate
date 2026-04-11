@@ -1,0 +1,14 @@
+config autoupdate 'config'
+	# GitHub 仓库地址，格式: 用户名/仓库名
+	option github_repo 'suifeng009/openwrt'
+
+	# 固件资产关键词（用于筛选 Release 附件中的升级包）
+	# 通常填 'sysupgrade'，会自动排除 factory.bin
+	option firmware_tag 'sysupgrade'
+
+	# 升级时是否保留路由器配置（1=保留, 0=全新安装）
+	option keep_config '1'
+
+	# 下载加速代理地址（可选，留空则直连 GitHub）
+	# 填写 ghproxy 等镜像站前缀，例如: https://ghproxy.com
+	option proxy_url ''

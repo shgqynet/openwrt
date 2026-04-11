@@ -4,6 +4,14 @@
 # 用途：修改默认配置，预置自定义设置
 #
 
+# 0. 集成本地源码插件（源码已放入仓库 packages/ 目录，无需依赖第三方且防止访问失败）
+# 直接从本工作区复制到 OpenWrt 的 package 编译目录
+cp -r "$GITHUB_WORKSPACE/packages/luci-app-autoupdate" package/luci-app-autoupdate
+cp -r "$GITHUB_WORKSPACE/packages/luci-app-aliddns" package/luci-app-aliddns
+cp -r "$GITHUB_WORKSPACE/packages/luci-app-argon-config" package/luci-app-argon-config
+
+
+
 # 1. 修改默认 LAN IP 为你习惯的网段 (3.1)
 sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generate
 
@@ -374,3 +382,15 @@ KEEP_D_DIR="package/base-files/files/lib/upgrade/keep.d"
 mkdir -p "$KEEP_D_DIR"
 echo "/etc/openvpn/" > "$KEEP_D_DIR/openvpn-custom"
 
+
+# 10. 写入本地版本号文件，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
+# Release Tag 格式 (openwrt-builder.yml)：YYYY.MM.DD-HHMM
+# 本地版本记录为 vYYYY.MM.DD，插件比对逻辑：云端 tag > 本地 tag 则提示更新
+BUILD_DATE="$(date +"%Y.%m.%d")"
+FW_VERSION_DIR="package/base-files/files/etc"
+mkdir -p "$FW_VERSION_DIR"
+# 写入 DISTRIB_REVISION 字段（与官方 openwrt_release 格式兼容）
+# luci-app-autoupdate 默认读取此字段进行版本比对
+sed -i '/^DISTRIB_REVISION=/d' "$FW_VERSION_DIR/openwrt_release" 2>/dev/null || true
+echo "DISTRIB_REVISION='v${BUILD_DATE}'" >> "$FW_VERSION_DIR/openwrt_release"
+echo "本地版本号已写入固件: v${BUILD_DATE}"

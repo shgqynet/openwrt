@@ -10,20 +10,19 @@ sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
 # 1. 添加 OpenClash 源 (作为主力科学上网插件)
 echo 'src-git openclash https://github.com/vernesong/OpenClash.git;dev' >> feeds.conf.default
 
-# 2. 添加 全能推送 (PushBot/微信推送)
+# 2. 添加 tty228 微信/全能推送 (目前最活跃的推送插件)
 # 改为手动 git clone，防止被 make defconfig 静默删除
 rm -rf package/luci-app-pushbot
-git clone https://github.com/zzsj0928/luci-app-pushbot package/luci-app-pushbot
+rm -rf package/luci-app-wechatpush
+git clone https://github.com/tty228/luci-app-wechatpush.git package/luci-app-wechatpush
 
-# 3. 添加 阿里云盘 DDNS (luci-app-aliddns) 独立插件
-rm -rf package/luci-app-aliddns
-git clone https://github.com/honwen/luci-app-aliddns.git package/luci-app-aliddns
+# 3. 阿里云 DDNS (luci-app-aliddns)
+# 由于上游长期未更新，已将源码固化在本地 packages 目录下，在 diy-part2.sh 中处理
 
 # 注：luci-theme-argon 和 luci-app-adguardhome 已内置于 LEDE 官方 feeds，无需单独添加
 
-# 3. 添加 Argon 主题设置插件 (luci-app-argon-config)
-rm -rf package/luci-app-argon-config
-git clone https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
+# 4. Argon 主题设置插件 (luci-app-argon-config)
+# 由于上游长期未更新，已将源码固化在本地 packages 目录下，在 diy-part2.sh 中处理
 
 # 4. 添加 OpenAppFilter (应用过滤)
 rm -rf package/OpenAppFilter

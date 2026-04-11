@@ -1,0 +1,210 @@
+#!/bin/sh
+#
+# autoupdate — OpenWrt 固件云端自动更新核心脚本
+# 用法:
+#   autoupdate check              检查是否有新版本，输出 JSON
+#   autoupdate download <url>     下载固件到 /tmp/firmware_update.bin
+#   autoupdate verify [sha256]    对已下载固件做 SHA256 校验
+#   autoupdate upgrade            执行 sysupgrade
+#
+
+CONF="autoupdate"
+FW_FILE="/tmp/firmware_update.bin"
+
+# ---------- 工具函数 ----------
+
+log() {
+    logger -t autoupdate "$*"
+}
+
+get_cfg() {
+    uci -q get "${CONF}.config.$1"
+}
+
+# 读取本地版本号（由编译脚本写入 DISTRIB_REVISION）
+get_local_version() {
+    local ver
+    ver=$(grep '^DISTRIB_REVISION=' /etc/openwrt_release 2>/dev/null \
+          | cut -d"'" -f2 | sed 's/^v//')
+    echo "${ver:-0000.00.00}"
+}
+
+# 构造最终请求 URL（按需拼接镜像前缀）
+build_url() {
+    local url="$1"
+    local proxy
+    proxy=$(get_cfg proxy_url)
+    # 去掉末尾斜线
+    proxy="${proxy%/}"
+    if [ -n "$proxy" ]; then
+        echo "${proxy}/${url}"
+    else
+        echo "$url"
+    fi
+}
+
+# 调用 GitHub API 获取最新 Release JSON
+fetch_release_json() {
+    local repo="$1"
+    local api="https://api.github.com/repos/${repo}/releases/latest"
+    local req_url
+    req_url=$(build_url "$api")
+
+    curl -sf \
+        --connect-timeout 15 \
+        --max-time 30 \
+        -H "Accept: application/vnd.github.v3+json" \
+        -H "User-Agent: OpenWrt-AutoUpdate/1.0" \
+        "$req_url"
+}
+
+# 版本比较：云端版本 > 本地版本 时返回 0（真）
+# 版本格式：YYYY.MM.DD 或 YYYY.MM.DD-HHMM
+version_is_newer() {
+    local cloud local_ver
+    cloud=$(echo "$1" | sed 's/^v//' | cut -d'-' -f1)
+    local_ver=$(echo "$2" | sed 's/^v//' | cut -d'-' -f1)
+    # 纯字典序比较日期字符串即可（格式一致时有效）
+    [ "$cloud" \> "$local_ver" ]
+}
+
+# ---------- 子命令实现 ----------
+
+cmd_check() {
+    local repo proxy release_json cloud_tag release_body
+    local keyword asset_url asset_name asset_sha256
+    local local_ver has_update
+
+    repo=$(get_cfg github_repo)
+    [ -z "$repo" ] && { echo '{"error":"请先在设置中填写 GitHub 仓库地址（格式：用户名/仓库名）"}'; exit 1; }
+
+    log "检查更新，仓库: $repo"
+
+    release_json=$(fetch_release_json "$repo")
+    if [ $? -ne 0 ] || [ -z "$release_json" ]; then
+        echo '{"error":"无法连接 GitHub API，请检查网络连接或在高级设置中启用加速代理"}'
+        exit 1
+    fi
+
+    cloud_tag=$(echo "$release_json" | jsonfilter -e '@.tag_name' 2>/dev/null)
+    [ -z "$cloud_tag" ] && { echo '{"error":"无法解析 Release 信息，请确认仓库中已发布 Release"}'; exit 1; }
+
+    release_body=$(echo "$release_json" | jsonfilter -e '@.body' 2>/dev/null \
+                   | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' | tr -d '\r\n')
+
+    local_ver=$(get_local_version)
+
+    has_update=0
+    version_is_newer "$cloud_tag" "$local_ver" && has_update=1
+
+    # 查找匹配关键词的固件资产（优先含 sysupgrade，排除 factory）
+    keyword=$(get_cfg firmware_tag)
+    keyword="${keyword:-sysupgrade}"
+
+    # 枚举所有资产名与URL，按行配对后匹配关键词
+    local all_names all_urls
+    all_names=$(echo "$release_json" | jsonfilter -e '@.assets[*].name' 2>/dev/null)
+    all_urls=$(echo "$release_json" | jsonfilter -e '@.assets[*].browser_download_url' 2>/dev/null)
+
+    asset_name=$(echo "$all_names" | grep "$keyword" | grep -v 'factory' | head -1)
+    asset_url=$(echo "$all_urls"  | grep "$keyword" | grep -v 'factory' | head -1)
+
+    # 查找对应的 sha256sums 文件 URL
+    asset_sha256=$(echo "$all_urls" | grep 'sha256sums\|sha256sum\|SHA256SUMS' | head -1)
+
+    log "检查完成 | 本地: v${local_ver} | 云端: ${cloud_tag} | 有更新: ${has_update}"
+
+    printf '{"local":"v%s","cloud":"%s","has_update":%d,"asset_name":"%s","asset_url":"%s","sha256_url":"%s","body":"%s"}\n' \
+        "$local_ver" "$cloud_tag" "$has_update" \
+        "${asset_name:-}" "${asset_url:-}" "${asset_sha256:-}" \
+        "$release_body"
+}
+
+cmd_download() {
+    local raw_url="$1"
+    [ -z "$raw_url" ] && { echo '{"error":"缺少下载 URL"}'; exit 1; }
+
+    local url
+    url=$(build_url "$raw_url")
+
+    log "开始下载固件: $url"
+    rm -f "$FW_FILE"
+
+    if curl -L \
+        --connect-timeout 30 \
+        --max-time 1200 \
+        --retry 2 \
+        -o "$FW_FILE" \
+        "$url" 2>/tmp/autoupdate_dl.log; then
+
+        local size
+        size=$(wc -c < "$FW_FILE")
+        log "下载完成，大小: ${size} 字节"
+        printf '{"success":1,"file":"%s","size":%d}\n' "$FW_FILE" "$size"
+    else
+        local err
+        err=$(cat /tmp/autoupdate_dl.log 2>/dev/null | tail -1 | sed 's/"/\\"/g')
+        rm -f "$FW_FILE"
+        printf '{"error":"下载失败: %s"}\n' "$err"
+        exit 1
+    fi
+}
+
+cmd_verify() {
+    local expected_sha256="$1"
+
+    [ ! -f "$FW_FILE" ] && { echo '{"error":"固件文件不存在，请先下载"}'; exit 1; }
+
+    local actual
+    actual=$(sha256sum "$FW_FILE" | awk '{print $1}')
+
+    if [ -n "$expected_sha256" ]; then
+        # 从 sha256sums 文件内容中提取对应固件的哈希（兼容多文件格式）
+        local expected_hash
+        expected_hash=$(echo "$expected_sha256" | grep -i "$(basename "$FW_FILE")\|firmware" | awk '{print $1}' | head -1)
+        # 如果直接传入的就是哈希值（64位hex）
+        [ -z "$expected_hash" ] && echo "$expected_sha256" | grep -qE '^[0-9a-f]{64}$' \
+            && expected_hash="$expected_sha256"
+
+        if [ -n "$expected_hash" ] && [ "$actual" != "$expected_hash" ]; then
+            printf '{"error":"SHA256 校验失败，文件可能已损坏","expected":"%s","actual":"%s"}\n' \
+                "$expected_hash" "$actual"
+            exit 1
+        fi
+    fi
+
+    log "校验通过: $actual"
+    printf '{"success":1,"sha256":"%s"}\n' "$actual"
+}
+
+cmd_upgrade() {
+    [ ! -f "$FW_FILE" ] && { echo '{"error":"固件文件不存在"}'; exit 1; }
+
+    local keep_config
+    keep_config=$(get_cfg keep_config)
+    keep_config="${keep_config:-1}"
+
+    log "执行 sysupgrade，保留配置: $keep_config"
+
+    if [ "$keep_config" = "1" ]; then
+        exec sysupgrade -c "$FW_FILE"
+    else
+        exec sysupgrade -n "$FW_FILE"
+    fi
+}
+
+# ---------- 入口 ----------
+
+CMD="$1"
+shift
+
+case "$CMD" in
+    check)   cmd_check   "$@" ;;
+    download) cmd_download "$@" ;;
+    verify)  cmd_verify  "$@" ;;
+    upgrade) cmd_upgrade "$@" ;;
+    *)
+        echo "Usage: autoupdate {check|download <url>|verify [sha256]|upgrade}"
+        exit 1
+        ;;
+esac
