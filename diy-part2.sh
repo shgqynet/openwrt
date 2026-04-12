@@ -18,13 +18,11 @@ sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generat
 # 2. 修改默认主机名
 sed -i 's/OpenWrt/MyOpenWrt/g' package/base-files/files/bin/config_generate
 
-# 2b. 从 config_generate 源头删除 wan6 接口的创建逻辑
-# 这是 wan6 被持续生成的根本原因：config_generate 在每次首次启动时都会重建 wan6
-# 用 awk 删除包含 "wan6" 的整个 set_interface 调用块（从 set_interface wan6 直到下一个空行）
-awk '/set_interface.*wan6/{skip=1} skip && /^\s*$/{skip=0; next} !skip' \
-    package/base-files/files/bin/config_generate > /tmp/config_generate.tmp && \
-    mv /tmp/config_generate.tmp package/base-files/files/bin/config_generate
-chmod +x package/base-files/files/bin/config_generate
+# 2b. wan6 接口清理由后置的 uci-defaults 脚本负责（97-auto-network 与 99-custom-settings）。
+# [已废弃] 原先用 awk 修改 config_generate 的方案存在软砖风险：
+#   其"遇空行停止"逻辑在不同平台源码格式下不可靠，可能误删大括号等关键代码，
+#   导致首次开机无法生成网络配置。
+# 后置 uci delete network.wan6 已足够可靠，无需在此修改源文件。
 
 # 3. 启用 BBR TCP 拥塞控制 + FQ 队列调度，并彻底全局禁用 IPv6
 mkdir -p package/base-files/files/etc/sysctl.d
@@ -324,22 +322,35 @@ printf '%s\n' "uci set openvpn.server.config='/etc/openvpn/server.conf'" >> "$OV
 printf '%s\n' 'uci commit openvpn' >> "$OVPN_SCRIPT"
 printf '%s\n' '' >> "$OVPN_SCRIPT"
 printf '%s\n' '# --- 防火墙放行 1194/UDP ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'uci set firewall.openvpn=rule' >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn.name='Allow-OpenVPN'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn.src='wan'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn.dest_port='1194'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn.proto='udp'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn.target='ACCEPT'" >> "$OVPN_SCRIPT"
-printf '%s\n' 'uci commit firewall' >> "$OVPN_SCRIPT"
+printf '%s\n' 'uci set firewall.openvpn_rule=rule' >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_rule.name='Allow-OpenVPN'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_rule.src='wan'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_rule.dest_port='1194'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_rule.proto='udp'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_rule.target='ACCEPT'" >> "$OVPN_SCRIPT"
 printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 添加 OpenVPN 转发和伪装规则 ---' >> "$OVPN_SCRIPT"
-printf '%s\n' '# 允许 tun 接口转发，并进行 SNAT 伪装，保证客户端能访问局域网设备' >> "$OVPN_SCRIPT"
-printf '%s\n' 'grep -q "10.8.0.0/24" /etc/firewall.user 2>/dev/null || {' >> "$OVPN_SCRIPT"
-printf '%s\n' '    echo "iptables -I FORWARD -i tun+ -j ACCEPT" >> /etc/firewall.user' >> "$OVPN_SCRIPT"
-printf '%s\n' '    echo "iptables -I FORWARD -o tun+ -j ACCEPT" >> /etc/firewall.user' >> "$OVPN_SCRIPT"
-printf '%s\n' '    echo "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user' >> "$OVPN_SCRIPT"
-printf '%s\n' '    fw3 restart 2>/dev/null || /etc/init.d/firewall restart 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' '}' >> "$OVPN_SCRIPT"
+printf '%s\n' '# --- 添加 OpenVPN 防火墙区域与转发伪装（fw4/nftables 兼容）---' >> "$OVPN_SCRIPT"
+printf '%s\n' '# 使用 UCI firewall zone，fw3 与 fw4 均可识别，替代已失效的 iptables + /etc/firewall.user 方案。' >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_zone='zone'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_zone.name='openvpn'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_zone.input='ACCEPT'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_zone.output='ACCEPT'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.openvpn_zone.forward='ACCEPT'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci add_list firewall.openvpn_zone.device='tun+'" >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# 允许 OpenVPN Zone 与 LAN Zone 双向互通' >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_fwd='forwarding'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_fwd.src='openvpn'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_fwd.dest='lan'" >> "$OVPN_SCRIPT"
+printf '%s\n' '' >> "$OVPN_SCRIPT"
+printf '%s\n' '# SNAT 伪装：确保 VPN 客户端 (10.8.0.x) 能正常访问局域网其他设备' >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_masq='nat'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_masq.name='ovpn-to-lan'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_masq.src='openvpn'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_masq.dest='lan'" >> "$OVPN_SCRIPT"
+printf '%s\n' "uci set firewall.ovpn_lan_masq.target='MASQUERADE'" >> "$OVPN_SCRIPT"
+printf '%s\n' 'uci commit firewall' >> "$OVPN_SCRIPT"
+printf '%s\n' '/etc/init.d/firewall restart 2>/dev/null' >> "$OVPN_SCRIPT"
 printf '%s\n' '' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 初始化完毕！"' >> "$OVPN_SCRIPT"
 printf '%s\n' 'logger "OpenVPN: 请在路由器 Web 界面【服务】->【OpenVPN 客户端配置下载】中直接获取配置文件。"' >> "$OVPN_SCRIPT"
@@ -361,7 +372,7 @@ printf "persist-key\npersist-tun\n"
 printf "cipher AES-256-GCM\nauth SHA256\n"
 printf "key-direction 1\nverb 3\n\n"
 printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"
-printf "<cert>\n"; openssl x509 -in /etc/openvpn/keys/client.crt; printf "</cert>\n\n"
+printf "<cert>\n"; cat /etc/openvpn/keys/client.crt; printf "</cert>\n\n"
 printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"
 printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"
 EOF
@@ -590,7 +601,7 @@ mkdir -p "$CORE_DIR"
 echo "Downloading OpenClash cores..."
 if curl -sL --connect-timeout 60 \
     https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64.tar.gz \
-    | tar xzvC "$CORE_DIR"; then
+    | tar xzvC "$CORE_DIR" -f -; then
     mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta" 2>/dev/null || true
     chmod +x "$CORE_DIR/clash_meta"
     echo "OpenClash core downloaded successfully!"
