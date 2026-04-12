@@ -104,6 +104,11 @@ if [ -f "$BASE_DIR/.config" ]; then
     cp "$BASE_DIR/.config" .config
     # 扩展生成完整的默认配置清单
     make defconfig
+    # make defconfig 会覆盖版本号，必须在之后重新注入
+    BUILD_DATE="$(date +"%Y.%m.%d-%H%M")"
+    sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
+    echo "CONFIG_VERSION_NUMBER=\"${BUILD_DATE}\"" >> .config
+    echo "✅ 固件版本号已注入: ${BUILD_DATE}"
 else
     echo "❌ 严重错误: 当前环境没有 .config，无法编译！"
     exit 1

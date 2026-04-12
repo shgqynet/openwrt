@@ -103,8 +103,9 @@ jobs:
         # make defconfig 会用 Kconfig 默认值覆盖 CONFIG_VERSION_NUMBER，
         # 必须在 defconfig 之后再次写入版本号。
         sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-        echo 'CONFIG_VERSION_NUMBER="${{ env.BUILD_DATE }}"' >> .config
+        echo "CONFIG_VERSION_NUMBER=\"${{ env.BUILD_DATE }}\"" >> .config
         echo "[版本注入] CONFIG_VERSION_NUMBER = ${{ env.BUILD_DATE }}"
+        grep 'CONFIG_VERSION_NUMBER' .config
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
