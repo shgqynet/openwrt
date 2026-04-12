@@ -465,8 +465,21 @@ end
 function action_index()
     local http  = require "luci.http"
     local sys   = require "luci.sys"
+    local uci   = require "luci.model.uci".cursor()
 
-    local domain = http.formvalue("domain") or ""
+    local saved_domain = uci:get("network", "wg0", "endpoint_domain") or ""
+    local domain = http.formvalue("domain")
+    
+    -- 如果用户提交了新域名，保存到 uci
+    if domain and domain ~= "" and domain ~= saved_domain then
+        uci:set("network", "wg0", "endpoint_domain", domain)
+        uci:commit("network")
+        saved_domain = domain
+    end
+    
+    -- 页面上最终使用的域名（优先使用表单的值，如果没提交就是空的时候，使用保存的值）
+    domain = (domain and domain ~= "") and domain or saved_domain
+
     local device = http.formvalue("device") or "phone"
     local action = http.formvalue("action") or ""
 
