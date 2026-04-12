@@ -419,12 +419,11 @@ echo "/etc/openvpn/" > "$KEEP_D_DIR/openvpn-custom"
 # Release Tag 格式 (openwrt-builder.yml)：YYYY.MM.DD-HHMM
 # 插件比对逻辑：云端 tag > 本地 tag 则提示更新
 #
-# 【修复说明】
-# 不能直接写 package/base-files/files/etc/openwrt_release，
-# 因为 OpenWrt 编译系统在打包时会根据 .config 中的 CONFIG_VERSION_* 变量
-# 自动重新生成该文件，手写的内容会被覆盖。
-# 正确做法：将版本号注入 .config 的 CONFIG_VERSION_NUMBER 字段，
-# 编译系统会将其写入 DISTRIB_REVISION，从而让版本号正确生成到固件中。
+# 【重要说明】
+# 此处写入 .config 的版本号会被随后执行的 `make defconfig` 覆盖！
+# 真正生效的二次注入位于 workflow 的「Download package」步骤中，
+# 在 `make defconfig` 执行完毕后立即重写 CONFIG_VERSION_NUMBER。
+# 此处保留是为了方便本地调试参考。
 BUILD_DATE="${BUILD_DATE:-$(date +"%Y.%m.%d-%H%M")}"
 
 # 从 .config 中删除旧的版本号配置（避免重复），再写入新值
@@ -435,4 +434,4 @@ sed -i '/^CONFIG_VERSION_CODE=/d' .config
 # CONFIG_VERSION_CODE   → 生成到 /etc/openwrt_release 的 DISTRIB_CODENAME 字段（可选）
 echo "CONFIG_VERSION_NUMBER=\"${BUILD_DATE}\"" >> .config
 
-echo "固件版本号已注入 .config: ${BUILD_DATE}"
+echo "固件版本号已写入 .config（预注入，实际生效在 defconfig 之后）: ${BUILD_DATE}"
