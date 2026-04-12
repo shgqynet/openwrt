@@ -415,14 +415,24 @@ mkdir -p "$KEEP_D_DIR"
 echo "/etc/openvpn/" > "$KEEP_D_DIR/openvpn-custom"
 
 
-# 10. 写入本地版本号文件，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
+# 10. 注入固件版本号，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
 # Release Tag 格式 (openwrt-builder.yml)：YYYY.MM.DD-HHMM
-# 本地版本记录为 YYYY.MM.DD-HHMM，插件比对逻辑：云端 tag > 本地 tag 则提示更新
+# 插件比对逻辑：云端 tag > 本地 tag 则提示更新
+#
+# 【修复说明】
+# 不能直接写 package/base-files/files/etc/openwrt_release，
+# 因为 OpenWrt 编译系统在打包时会根据 .config 中的 CONFIG_VERSION_* 变量
+# 自动重新生成该文件，手写的内容会被覆盖。
+# 正确做法：将版本号注入 .config 的 CONFIG_VERSION_NUMBER 字段，
+# 编译系统会将其写入 DISTRIB_REVISION，从而让版本号正确生成到固件中。
 BUILD_DATE="${BUILD_DATE:-$(date +"%Y.%m.%d-%H%M")}"
-FW_VERSION_DIR="package/base-files/files/etc"
-mkdir -p "$FW_VERSION_DIR"
-# 写入 DISTRIB_REVISION 字段（与官方 openwrt_release 格式兼容）
-# luci-app-autoupdate 默认读取此字段进行版本比对
-sed -i '/^DISTRIB_REVISION=/d' "$FW_VERSION_DIR/openwrt_release" 2>/dev/null || true
-echo "DISTRIB_REVISION='${BUILD_DATE}'" >> "$FW_VERSION_DIR/openwrt_release"
-echo "本地版本号已写入固件: ${BUILD_DATE}"
+
+# 从 .config 中删除旧的版本号配置（避免重复），再写入新值
+sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
+sed -i '/^CONFIG_VERSION_CODE=/d' .config
+
+# CONFIG_VERSION_NUMBER → 生成到 /etc/openwrt_release 的 DISTRIB_REVISION 字段
+# CONFIG_VERSION_CODE   → 生成到 /etc/openwrt_release 的 DISTRIB_CODENAME 字段（可选）
+echo "CONFIG_VERSION_NUMBER=\"${BUILD_DATE}\"" >> .config
+
+echo "固件版本号已注入 .config: ${BUILD_DATE}"
