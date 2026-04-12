@@ -18,6 +18,14 @@ sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generat
 # 2. 修改默认主机名
 sed -i 's/OpenWrt/MyOpenWrt/g' package/base-files/files/bin/config_generate
 
+# 2b. 从 config_generate 源头删除 wan6 接口的创建逻辑
+# 这是 wan6 被持续生成的根本原因：config_generate 在每次首次启动时都会重建 wan6
+# 用 awk 删除包含 "wan6" 的整个 set_interface 调用块（从 set_interface wan6 直到下一个空行）
+awk '/set_interface.*wan6/{skip=1} skip && /^\s*$/{skip=0; next} !skip' \
+    package/base-files/files/bin/config_generate > /tmp/config_generate.tmp && \
+    mv /tmp/config_generate.tmp package/base-files/files/bin/config_generate
+chmod +x package/base-files/files/bin/config_generate
+
 # 3. 启用 BBR TCP 拥塞控制 + FQ 队列调度，并彻底全局禁用 IPv6
 mkdir -p package/base-files/files/etc/sysctl.d
 cat > package/base-files/files/etc/sysctl.d/10-bbr.conf << 'EOF'
@@ -187,11 +195,14 @@ if ! uci -q get network.wg0 > /dev/null; then
 	uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
 	uci commit network
 
-	# 保存客户端私钥供人工查阅（公钥已注入 UCI，私钥需另分发给客户端）
+	# 保存所有密钥文件（客户端私钥 + 服务端公钥），供配置下载页面使用
 	mkdir -p /etc/wireguard
 	printf '%s\n' "$WG_CLIENT_PRIV" > /etc/wireguard/phone_client.key
 	printf '%s\n' "$WG_PC_PRIV"     > /etc/wireguard/pc_client.key
+	# 服务端公钥：客户端配置中的 [Peer] PublicKey 字段需要用到它
+	printf '%s\n' "$(echo "$WG_SERVER_PRIV" | wg pubkey)" > /etc/wireguard/server_public.key
 	chmod 600 /etc/wireguard/phone_client.key /etc/wireguard/pc_client.key
+	chmod 644 /etc/wireguard/server_public.key
 fi
 
 if ! uci -q get firewall.wg > /dev/null; then
@@ -386,6 +397,178 @@ function action_download()
     luci.http.write(content)
 end
 EOF
+
+# --- WireGuard 客户端配置下载功能 ---
+# 用户在 LuCI 页面输入 DDNS 域名，即可获得完整的客户端 .conf 文件和二维码
+# 服务端公钥、客户端私钥均在首次启动时自动生成并保存
+
+# 1. 核心生成脚本：/bin/gen-wg-client <phone|pc> <domain>
+mkdir -p package/base-files/files/bin
+cat > package/base-files/files/bin/gen-wg-client << 'EOF'
+#!/bin/sh
+# 用法: gen-wg-client <phone|pc> <domain>
+DEVICE="${1:-phone}"
+DOMAIN="${2:-your-domain.example.com}"
+
+case "$DEVICE" in
+    phone)
+        KEY_FILE="/etc/wireguard/phone_client.key"
+        CLIENT_IP="10.0.0.2/32"
+        ;;
+    pc)
+        KEY_FILE="/etc/wireguard/pc_client.key"
+        CLIENT_IP="10.0.0.3/32"
+        ;;
+    *)
+        echo "Error: unknown device type '$DEVICE'" >&2
+        exit 1
+        ;;
+esac
+
+if [ ! -f "$KEY_FILE" ]; then
+    echo "Error: key file not found: $KEY_FILE" >&2
+    echo "System may not have completed first-boot initialization yet." >&2
+    exit 1
+fi
+if [ ! -f "/etc/wireguard/server_public.key" ]; then
+    echo "Error: server public key not found." >&2
+    exit 1
+fi
+
+PRIV_KEY="$(cat $KEY_FILE)"
+SERVER_PUB="$(cat /etc/wireguard/server_public.key)"
+PORT="$(uci -q get network.wg0.listen_port 2>/dev/null || echo 51820)"
+DNS="192.168.3.1"
+
+printf '[Interface]\n'
+printf 'PrivateKey = %s\n' "$PRIV_KEY"
+printf 'Address = %s\n' "$CLIENT_IP"
+printf 'DNS = %s\n' "$DNS"
+printf '\n'
+printf '[Peer]\n'
+printf 'PublicKey = %s\n' "$SERVER_PUB"
+printf 'AllowedIPs = 0.0.0.0/0\n'
+printf 'Endpoint = %s:%s\n' "$DOMAIN" "$PORT"
+printf 'PersistentKeepalive = 25\n'
+EOF
+chmod +x package/base-files/files/bin/gen-wg-client
+
+# 2. LuCI 控制器
+mkdir -p package/base-files/files/usr/lib/lua/luci/controller
+cat > package/base-files/files/usr/lib/lua/luci/controller/wg_client_dl.lua << 'EOF'
+module("luci.controller.wg_client_dl", package.seeall)
+
+function index()
+    entry({"admin", "services", "wg_client_dl"}, call("action_index"), "WireGuard 客户端配置", 98).dependent = true
+end
+
+function action_index()
+    local http  = require "luci.http"
+    local sys   = require "luci.sys"
+
+    local domain = http.formvalue("domain") or ""
+    local device = http.formvalue("device") or "phone"
+    local action = http.formvalue("action") or ""
+
+    -- 下载 .conf 文件
+    if action == "download" and domain ~= "" then
+        local conf = sys.exec("/bin/gen-wg-client " .. device .. " " .. domain .. " 2>/dev/null")
+        if conf and conf ~= "" then
+            http.prepare_content("text/plain")
+            http.header("Content-Disposition", "attachment; filename=\"wg-" .. device .. ".conf\"")
+            http.write(conf)
+        else
+            http.status(500, "Internal Server Error")
+            http.prepare_content("text/plain; charset=utf-8")
+            http.write("密钥尚未生成，请等待首次开机初始化完成后再试。")
+        end
+        return
+    end
+
+    -- 渲染页面（含配置预览和二维码）
+    local conf_text = ""
+    local qr_b64   = ""
+    if action == "preview" and domain ~= "" then
+        conf_text = sys.exec("/bin/gen-wg-client " .. device .. " " .. domain .. " 2>/dev/null")
+        if conf_text and conf_text ~= "" then
+            -- 生成 SVG 二维码（qrencode 已内置）
+            local tmp = "/tmp/wg_qr_" .. device .. ".svg"
+            os.execute("/bin/gen-wg-client " .. device .. " " .. domain .. " 2>/dev/null | qrencode -t SVG -o " .. tmp)
+            local f = io.open(tmp, "r")
+            if f then
+                qr_b64 = f:read("*a")
+                f:close()
+                os.remove(tmp)
+            end
+        end
+    end
+
+    luci.template.render("wg_client_dl", {
+        domain    = domain,
+        device    = device,
+        conf_text = conf_text,
+        qr_svg    = qr_b64,
+    })
+end
+EOF
+
+# 3. LuCI 视图模板
+mkdir -p package/base-files/files/usr/lib/lua/luci/view
+cat > package/base-files/files/usr/lib/lua/luci/view/wg_client_dl.htm << 'HTEOF'
+<%+header%>
+<style>
+.wg-card{background:#1e293b;border-radius:12px;padding:24px;margin-bottom:20px;color:#e2e8f0}
+.wg-card h3{margin:0 0 16px;color:#7dd3fc;font-size:1.1em}
+.wg-form label{display:block;margin-bottom:6px;font-size:.9em;color:#94a3b8}
+.wg-form input,.wg-form select{width:100%;padding:10px 14px;border-radius:8px;
+  border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:.95em;box-sizing:border-box}
+.wg-form input:focus,.wg-form select:focus{outline:none;border-color:#38bdf8}
+.wg-btn{display:inline-block;padding:10px 22px;border-radius:8px;border:none;
+  cursor:pointer;font-size:.95em;margin-right:10px;margin-top:12px}
+.wg-btn-preview{background:#0ea5e9;color:#fff}
+.wg-btn-dl{background:#10b981;color:#fff}
+.wg-pre{background:#0f172a;border-radius:8px;padding:16px;font-family:monospace;
+  font-size:.85em;white-space:pre;overflow-x:auto;color:#86efac;border:1px solid #1e3a4a}
+.wg-qr{text-align:center;margin-top:16px}
+.wg-qr svg{max-width:220px;height:auto;background:#fff;padding:10px;border-radius:8px}
+.wg-tip{font-size:.83em;color:#64748b;margin-top:8px}
+</style>
+<h2><%-translate("WireGuard 客户端配置")%></h2>
+<div class="wg-card">
+  <h3>生成客户端配置</h3>
+  <form method="post" class="wg-form">
+    <div style="margin-bottom:14px">
+      <label>设备类型</label>
+      <select name="device">
+        <option value="phone" <%=(device=="phone" and "selected" or "")%>>📱 手机（MyPhone - 10.0.0.2）</option>
+        <option value="pc"    <%=(device=="pc"    and "selected" or "")%>>💻 电脑（MyPC - 10.0.0.3）</option>
+      </select>
+    </div>
+    <div style="margin-bottom:14px">
+      <label>您的 DDNS 域名（或公网 IP）</label>
+      <input type="text" name="domain" value="<%=domain%>" placeholder="your-ddns.example.com" required />
+    </div>
+    <div>
+      <button class="wg-btn wg-btn-preview" type="submit" name="action" value="preview">👁 预览 &amp; 二维码</button>
+      <button class="wg-btn wg-btn-dl"      type="submit" name="action" value="download">⬇ 下载 .conf 文件</button>
+    </div>
+  </form>
+  <p class="wg-tip">所有密钥均在首次开机时自动生成。您只需填写您的域名即可获得完整客户端配置。</p>
+</div>
+<% if conf_text and conf_text ~= "" then %>
+<div class="wg-card">
+  <h3>配置内容预览</h3>
+  <div class="wg-pre"><%=conf_text%></div>
+  <% if qr_svg and qr_svg ~= "" then %>
+  <div class="wg-qr">
+    <p style="color:#94a3b8;margin-bottom:8px">手机端扫码导入</p>
+    <%=qr_svg%>
+  </div>
+  <% end %>
+</div>
+<% end %>
+<%+footer%>
+HTEOF
 
 # 6. 预置 OpenClash 内核（避免首次安装系统后因无代理导致无法下载内核的死锁问题）
 CORE_DIR="package/base-files/files/etc/openclash/core"
