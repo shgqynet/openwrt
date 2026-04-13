@@ -631,7 +631,8 @@ echo "/etc/openvpn/" > "$KEEP_D_DIR/openvpn-custom"
 # 真正生效的二次注入位于 workflow 的「Download package」步骤中，
 # 在 `make defconfig` 执行完毕后立即重写 CONFIG_VERSION_NUMBER。
 # 此处保留是为了方便本地调试参考。
-BUILD_DATE="${BUILD_DATE:-$(date +"%Y.%m.%d-%H%M")}"
+# 获取与 GitHub Release 对应的东八区时间版本号 (如 2026.04.13-1800)
+BUILD_DATE=$(TZ=UTC-8 date +"%Y.%m.%d-%H%M")
 
 # 从 .config 中删除旧的版本号配置（避免重复），再写入新值
 sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
@@ -640,5 +641,8 @@ sed -i '/^CONFIG_VERSION_CODE=/d' .config
 # CONFIG_VERSION_NUMBER → 生成到 /etc/openwrt_release 的 DISTRIB_REVISION 字段
 # CONFIG_VERSION_CODE   → 生成到 /etc/openwrt_release 的 DISTRIB_CODENAME 字段（可选）
 echo "CONFIG_VERSION_NUMBER=\"${BUILD_DATE}\"" >> .config
+
+# 强制替换 Lean 源码中的硬编码 R 系列版本号为当前编译时间
+sed -i "s/R[0-9]\+\.[0-9]\+\.[0-9]\+/${BUILD_DATE}/g" package/lean/default-settings/files/zzz-default-settings
 
 echo "固件版本号已写入 .config（预注入，实际生效在 defconfig 之后）: ${BUILD_DATE}"
