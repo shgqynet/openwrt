@@ -12,19 +12,11 @@ cp -r "$GITHUB_WORKSPACE/packages/luci-app-argon-config" package/luci-app-argon-
 
 
 
-# 1. 修改默认 LAN IP 为你习惯的网段 (3.1)
+# 修改默认 LAN IP 和主机名
 sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generate
-
-# 2. 修改默认主机名
 sed -i 's/OpenWrt/MyOpenWrt/g' package/base-files/files/bin/config_generate
 
-# 2b. wan6 接口清理由后置的 uci-defaults 脚本负责（97-auto-network 与 99-custom-settings）。
-# [已废弃] 原先用 awk 修改 config_generate 的方案存在软砖风险：
-#   其"遇空行停止"逻辑在不同平台源码格式下不可靠，可能误删大括号等关键代码，
-#   导致首次开机无法生成网络配置。
-# 后置 uci delete network.wan6 已足够可靠，无需在此修改源文件。
-
-# 3. 启用 BBR TCP 拥塞控制 + FQ 队列调度，并彻底全局禁用 IPv6
+# 启用 BBR TCP 拥塞控制与 FQ 队列调度，并全局禁用 IPv6
 mkdir -p package/base-files/files/etc/sysctl.d
 cat > package/base-files/files/etc/sysctl.d/10-bbr.conf << 'EOF'
 net.core.default_qdisc=fq
@@ -50,11 +42,7 @@ mkdir -p "$uci_dir"
 # 多网口：eth0 -> LAN, eth1 -> WAN, eth2及以后 -> 桥接至 LAN
 cat > "$uci_dir/97-auto-network" << 'EOF'
 #!/bin/sh
-# 首次启动时自动识别并绑定多网卡
-
-# 【安全判断】如果是升级且“保留配置”，则跳过网卡分配，避免覆盖用户自定义的网口、VLAN或链路聚合等高级设置
 if [ "$(uci -q get network.globals.auto_inited)" = "1" ]; then
-    logger -t "auto-network" "Retained settings detected. Skipping auto-network configuration."
     exit 0
 fi
 
@@ -122,11 +110,9 @@ else
     uci delete network.wan6 2>/dev/null || true
 fi
 
-# 写入初始化标志位，后续升级只要保留了配置，就不会再次执行覆盖
 uci set network.globals='globals' 2>/dev/null || true
 uci set network.globals.auto_inited='1'
 uci commit network
-logger -t "auto-network" "Network configured. LAN: $lan_ports, WAN: ${wan_port:-none}"
 EOF
 chmod +x "$uci_dir/97-auto-network"
 
@@ -229,17 +215,17 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.lan_wg_forward.src="lan"
 	uci set firewall.lan_wg_forward.dest="wireguard"
 	
-	# 新增：针对 fw4 (OpenWrt 22.03+) 配置 SNAT 伪装，解决 VPN 客户端无法访问局域网其他设备的问题
-	# 原因是局域网设备（如 Windows）的防火墙通常会丢弃来自非本网段 (10.0.0.x) 的请求
+	uci set firewall.wg_wan_forward="forwarding"
+	uci set firewall.wg_wan_forward.src="wireguard"
+	uci set firewall.wg_wan_forward.dest="wan"
+
 	uci set firewall.wg_lan_masq="nat"
 	uci set firewall.wg_lan_masq.name="wg-to-lan"
 	uci set firewall.wg_lan_masq.src="wireguard"
 	uci set firewall.wg_lan_masq.dest="lan"
 	uci set firewall.wg_lan_masq.target="MASQUERADE"
-	
 	uci commit firewall
 
-	# 写入防火墙自定义规则，作为老版本 fw3 (iptables) 的兼容后备方案
 	grep -q "10.0.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
 fi
 
@@ -247,113 +233,84 @@ exit 0
 EOF
 chmod +x "$uci_dir/99-custom-settings"
 
-# 8. 预置 OpenVPN 服务端自动初始化脚本
-# 原理：固件首次启动时自动生成 CA + 证书 + server.conf + client.ovpn
-# 用 printf 逐行写入，避免嵌套 heredoc 在 bash 解析时引发歧义
+# 预置 OpenVPN 服务端自动初始化脚本
 OVPN_SCRIPT="$uci_dir/98-openvpn-setup"
 
-printf '%s\n' '#!/bin/sh' > "$OVPN_SCRIPT"
-printf '%s\n' '# OpenVPN 服务端首次启动自动初始化' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# 已初始化过则跳过' >> "$OVPN_SCRIPT"
-printf '%s\n' '[ -f /etc/openvpn/keys/ca.crt ] && exit 0' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: 首次运行，开始自动生成证书（约需 30 秒）..."' >> "$OVPN_SCRIPT"
-printf '%s\n' 'mkdir -p /etc/openvpn/keys' >> "$OVPN_SCRIPT"
-printf '%s\n' 'chmod 700 /etc/openvpn/keys' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 生成 CA ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl req -new -x509 -days 3650 \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -key /etc/openvpn/keys/ca.key \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -out /etc/openvpn/keys/ca.crt \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -subj "/CN=MyRouter-CA" 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 生成服务端证书 ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl req -new -key /etc/openvpn/keys/server.key \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -out /etc/openvpn/keys/server.csr -subj "/CN=MyRouter-Server" 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl x509 -req -days 3650 \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -in /etc/openvpn/keys/server.csr \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -CA /etc/openvpn/keys/ca.crt \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -CAkey /etc/openvpn/keys/ca.key \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -CAcreateserial -out /etc/openvpn/keys/server.crt 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 生成客户端证书 ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl req -new -key /etc/openvpn/keys/client.key \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -out /etc/openvpn/keys/client.csr -subj "/CN=MyPhone-Client" 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openssl x509 -req -days 3650 \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -in /etc/openvpn/keys/client.csr \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -CA /etc/openvpn/keys/ca.crt \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -CAkey /etc/openvpn/keys/ca.key \' >> "$OVPN_SCRIPT"
-printf '%s\n' '    -CAcreateserial -out /etc/openvpn/keys/client.crt 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- TLS-Auth key（防暴力破解攻击）---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 服务端配置文件 ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'cat > /etc/openvpn/server.conf << CONEOF' >> "$OVPN_SCRIPT"
-printf '%s\n' 'port 1194' >> "$OVPN_SCRIPT"
-printf '%s\n' 'proto udp' >> "$OVPN_SCRIPT"
-printf '%s\n' 'dev tun' >> "$OVPN_SCRIPT"
-printf '%s\n' 'ca /etc/openvpn/keys/ca.crt' >> "$OVPN_SCRIPT"
-printf '%s\n' 'cert /etc/openvpn/keys/server.crt' >> "$OVPN_SCRIPT"
-printf '%s\n' 'key /etc/openvpn/keys/server.key' >> "$OVPN_SCRIPT"
-printf '%s\n' 'dh none' >> "$OVPN_SCRIPT"
-printf '%s\n' 'ecdh-curve prime256v1' >> "$OVPN_SCRIPT"
-printf '%s\n' 'tls-auth /etc/openvpn/keys/ta.key 0' >> "$OVPN_SCRIPT"
-printf '%s\n' 'cipher AES-256-GCM' >> "$OVPN_SCRIPT"
-printf '%s\n' 'auth SHA256' >> "$OVPN_SCRIPT"
-printf '%s\n' 'server 10.8.0.0 255.255.255.0' >> "$OVPN_SCRIPT"
-printf '%s\n' 'push "redirect-gateway def1 bypass-dhcp"' >> "$OVPN_SCRIPT"
-printf '%s\n' 'push "dhcp-option DNS 192.168.3.1"' >> "$OVPN_SCRIPT"
-printf '%s\n' 'keepalive 10 120' >> "$OVPN_SCRIPT"
-printf '%s\n' 'persist-key' >> "$OVPN_SCRIPT"
-printf '%s\n' 'persist-tun' >> "$OVPN_SCRIPT"
-printf '%s\n' 'status /tmp/openvpn-status.log' >> "$OVPN_SCRIPT"
-printf '%s\n' 'verb 3' >> "$OVPN_SCRIPT"
-printf '%s\n' 'CONEOF' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 注册 UCI 服务实例 ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'uci set openvpn.server=openvpn' >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set openvpn.server.enabled='1'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set openvpn.server.config='/etc/openvpn/server.conf'" >> "$OVPN_SCRIPT"
-printf '%s\n' 'uci commit openvpn' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 防火墙放行 1194/UDP ---' >> "$OVPN_SCRIPT"
-printf '%s\n' 'uci set firewall.openvpn_rule=rule' >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_rule.name='Allow-OpenVPN'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_rule.src='wan'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_rule.dest_port='1194'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_rule.proto='udp'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_rule.target='ACCEPT'" >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# --- 添加 OpenVPN 防火墙区域与转发伪装（fw4/nftables 兼容）---' >> "$OVPN_SCRIPT"
-printf '%s\n' '# 使用 UCI firewall zone，fw3 与 fw4 均可识别，替代已失效的 iptables + /etc/firewall.user 方案。' >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_zone='zone'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_zone.name='openvpn'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_zone.input='ACCEPT'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_zone.output='ACCEPT'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.openvpn_zone.forward='ACCEPT'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci add_list firewall.openvpn_zone.device='tun+'" >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# 允许 OpenVPN Zone 与 LAN Zone 双向互通' >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_fwd='forwarding'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_fwd.src='openvpn'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_fwd.dest='lan'" >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' '# SNAT 伪装：确保 VPN 客户端 (10.8.0.x) 能正常访问局域网其他设备' >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_masq='nat'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_masq.name='ovpn-to-lan'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_masq.src='openvpn'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_masq.dest='lan'" >> "$OVPN_SCRIPT"
-printf '%s\n' "uci set firewall.ovpn_lan_masq.target='MASQUERADE'" >> "$OVPN_SCRIPT"
-printf '%s\n' 'uci commit firewall' >> "$OVPN_SCRIPT"
-printf '%s\n' '/etc/init.d/firewall restart 2>/dev/null' >> "$OVPN_SCRIPT"
-printf '%s\n' '' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: 初始化完毕！"' >> "$OVPN_SCRIPT"
-printf '%s\n' 'logger "OpenVPN: 请在路由器 Web 界面【服务】->【OpenVPN 客户端配置下载】中直接获取配置文件。"' >> "$OVPN_SCRIPT"
+cat > "$OVPN_SCRIPT" << 'EOF'
+#!/bin/sh
+[ -f /etc/openvpn/keys/ca.crt ] && exit 0
+
+mkdir -p /etc/openvpn/keys
+chmod 700 /etc/openvpn/keys
+
+openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null
+openssl req -new -x509 -days 3650 -key /etc/openvpn/keys/ca.key -out /etc/openvpn/keys/ca.crt -subj "/CN=MyRouter-CA" 2>/dev/null
+
+openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null
+openssl req -new -key /etc/openvpn/keys/server.key -out /etc/openvpn/keys/server.csr -subj "/CN=MyRouter-Server" 2>/dev/null
+openssl x509 -req -days 3650 -in /etc/openvpn/keys/server.csr -CA /etc/openvpn/keys/ca.crt -CAkey /etc/openvpn/keys/ca.key -CAcreateserial -out /etc/openvpn/keys/server.crt 2>/dev/null
+
+openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null
+openssl req -new -key /etc/openvpn/keys/client.key -out /etc/openvpn/keys/client.csr -subj "/CN=MyPhone-Client" 2>/dev/null
+openssl x509 -req -days 3650 -in /etc/openvpn/keys/client.csr -CA /etc/openvpn/keys/ca.crt -CAkey /etc/openvpn/keys/ca.key -CAcreateserial -out /etc/openvpn/keys/client.crt 2>/dev/null
+
+openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
+
+cat > /etc/openvpn/server.conf << CONEOF
+port 1194
+proto udp
+dev tun
+ca /etc/openvpn/keys/ca.crt
+cert /etc/openvpn/keys/server.crt
+key /etc/openvpn/keys/server.key
+dh none
+ecdh-curve prime256v1
+tls-auth /etc/openvpn/keys/ta.key 0
+cipher AES-256-GCM
+auth SHA256
+server 10.8.0.0 255.255.255.0
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 192.168.3.1"
+keepalive 10 120
+persist-key
+persist-tun
+status /tmp/openvpn-status.log
+verb 3
+CONEOF
+
+uci set openvpn.server=openvpn
+uci set openvpn.server.enabled='1'
+uci set openvpn.server.config='/etc/openvpn/server.conf'
+uci commit openvpn
+
+uci set firewall.openvpn_rule=rule
+uci set firewall.openvpn_rule.name='Allow-OpenVPN'
+uci set firewall.openvpn_rule.src='wan'
+uci set firewall.openvpn_rule.dest_port='1194'
+uci set firewall.openvpn_rule.proto='udp'
+
+uci set firewall.openvpn_zone='zone'
+uci set firewall.openvpn_zone.name='openvpn'
+uci set firewall.openvpn_zone.input='ACCEPT'
+uci set firewall.openvpn_zone.output='ACCEPT'
+uci set firewall.openvpn_zone.forward='ACCEPT'
+uci add_list firewall.openvpn_zone.device='tun+'
+
+uci set firewall.ovpn_lan_fwd='forwarding'
+uci set firewall.ovpn_lan_fwd.src='openvpn'
+uci set firewall.ovpn_lan_fwd.dest='lan'
+
+uci set firewall.ovpn_wan_fwd='forwarding'
+uci set firewall.ovpn_wan_fwd.src='openvpn'
+uci set firewall.ovpn_wan_fwd.dest='wan'
+
+uci set firewall.ovpn_lan_masq='nat'
+uci set firewall.ovpn_lan_masq.name='ovpn-to-lan'
+uci set firewall.ovpn_lan_masq.src='openvpn'
+uci set firewall.ovpn_lan_masq.dest='lan'
+uci set firewall.ovpn_lan_masq.target='MASQUERADE'
+uci commit firewall
+EOF
 chmod +x "$OVPN_SCRIPT"
 
 # --- 提供 Web UI (LuCI) 一键下载 OpenVPN 配置文件的功能 ---
@@ -458,7 +415,12 @@ printf 'DNS = %s\n' "$DNS"
 printf '\n'
 printf '[Peer]\n'
 printf 'PublicKey = %s\n' "$SERVER_PUB"
-printf 'AllowedIPs = 0.0.0.0/0\n'
+if [ "$DEVICE" = "phone" ]; then
+    printf 'AllowedIPs = 0.0.0.0/0\n'
+else
+    # 电脑节点：仅路由内网与 VPN 网段，不影响本机原有外网访问
+    printf 'AllowedIPs = 192.168.3.0/24, 10.0.0.0/24\n'
+fi
 printf 'Endpoint = %s:%s\n' "$DOMAIN" "$PORT"
 printf 'PersistentKeepalive = 25\n'
 EOF
@@ -477,15 +439,26 @@ function action_index()
     local http  = require "luci.http"
     local sys   = require "luci.sys"
     local uci   = require "luci.model.uci".cursor()
+    local util  = require "luci.util"
 
-    local saved_domain = uci:get("network", "wg0", "endpoint_domain") or ""
+    local domain_file = "/etc/wireguard/domain.txt"
+    local saved_domain = ""
+    local f = io.open(domain_file, "r")
+    if f then
+        saved_domain = f:read("*l") or ""
+        f:close()
+    end
+    
     local domain = http.formvalue("domain")
     
-    -- 如果用户提交了新域名，保存到 uci
+    -- 从 UCI 迁移至文本直存：避免缺少 ACL 写入权限，或被网络设置页面的“保存应用”清洗掉未知字段
     if domain and domain ~= "" and domain ~= saved_domain then
-        uci:set("network", "wg0", "endpoint_domain", domain)
-        uci:commit("network")
-        saved_domain = domain
+        local w = io.open(domain_file, "w")
+        if w then
+            w:write(domain)
+            w:close()
+            saved_domain = domain
+        end
     end
     
     -- 页面上最终使用的域名（优先使用表单的值，如果没提交就是空的时候，使用保存的值）
@@ -496,7 +469,9 @@ function action_index()
 
     -- 下载 .conf 文件
     if action == "download" and domain ~= "" then
-        local conf = sys.exec("/bin/gen-wg-client " .. device .. " " .. domain .. " 2>/dev/null")
+        -- 修复重大隐患：Lua 的 %q 转义出的双引号依然会被 Shell 解析 $(...) 和反引号。必须用 shellquote (单引号)
+        local safe_cmd = "/bin/gen-wg-client " .. util.shellquote(device) .. " " .. util.shellquote(domain) .. " 2>/dev/null"
+        local conf = sys.exec(safe_cmd)
         if conf and conf ~= "" then
             http.prepare_content("text/plain")
             http.header("Content-Disposition", "attachment; filename=\"wg-" .. device .. ".conf\"")
@@ -513,11 +488,13 @@ function action_index()
     local conf_text = ""
     local qr_b64   = ""
     if action == "preview" and domain ~= "" then
-        conf_text = sys.exec("/bin/gen-wg-client " .. device .. " " .. domain .. " 2>/dev/null")
+        local safe_cmd1 = "/bin/gen-wg-client " .. util.shellquote(device) .. " " .. util.shellquote(domain) .. " 2>/dev/null"
+        conf_text = sys.exec(safe_cmd1)
         if conf_text and conf_text ~= "" then
             -- 生成 SVG 二维码（qrencode 已内置）
             local tmp = "/tmp/wg_qr_" .. device .. ".svg"
-            os.execute("/bin/gen-wg-client " .. device .. " " .. domain .. " 2>/dev/null | qrencode -t SVG -o " .. tmp)
+            local safe_cmd2 = "/bin/gen-wg-client " .. util.shellquote(device) .. " " .. util.shellquote(domain) .. " 2>/dev/null | qrencode -t SVG -o " .. util.shellquote(tmp)
+            os.execute(safe_cmd2)
             local f = io.open(tmp, "r")
             if f then
                 qr_b64 = f:read("*a")
@@ -598,15 +575,11 @@ HTEOF
 CORE_DIR="package/base-files/files/etc/openclash/core"
 mkdir -p "$CORE_DIR"
 
-echo "Downloading OpenClash cores..."
 if curl -sL --connect-timeout 60 \
     https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-amd64.tar.gz \
     | tar xzvC "$CORE_DIR" -f -; then
     mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta" 2>/dev/null || true
     chmod +x "$CORE_DIR/clash_meta"
-    echo "OpenClash core downloaded successfully!"
-else
-    echo "WARNING: OpenClash core download failed, will be downloaded at first boot."
 fi
 
 # 7. 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
@@ -624,25 +597,10 @@ echo "/etc/openvpn/" > "$KEEP_D_DIR/openvpn-custom"
 
 # 10. 注入固件版本号，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
 # Release Tag 格式 (openwrt-builder.yml)：YYYY.MM.DD-HHMM
-# 插件比对逻辑：云端 tag > 本地 tag 则提示更新
-#
-# 【重要说明】
-# 此处写入 .config 的版本号会被随后执行的 `make defconfig` 覆盖！
-# 真正生效的二次注入位于 workflow 的「Download package」步骤中，
-# 在 `make defconfig` 执行完毕后立即重写 CONFIG_VERSION_NUMBER。
-# 此处保留是为了方便本地调试参考。
-# 获取与 GitHub Release 对应的东八区时间版本号 (如 2026.04.13-1800)
 BUILD_DATE=$(TZ=UTC-8 date +"%Y.%m.%d-%H%M")
 
-# 从 .config 中删除旧的版本号配置（避免重复），再写入新值
 sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
 sed -i '/^CONFIG_VERSION_CODE=/d' .config
 
-# CONFIG_VERSION_NUMBER → 生成到 /etc/openwrt_release 的 DISTRIB_REVISION 字段
-# CONFIG_VERSION_CODE   → 生成到 /etc/openwrt_release 的 DISTRIB_CODENAME 字段（可选）
 echo "CONFIG_VERSION_NUMBER=\"${BUILD_DATE}\"" >> .config
-
-# 强制替换 Lean 源码中的硬编码 R 系列版本号为当前编译时间
 sed -i "s/R[0-9]\+\.[0-9]\+\.[0-9]\+/${BUILD_DATE}/g" package/lean/default-settings/files/zzz-default-settings
-
-echo "固件版本号已写入 .config（预注入，实际生效在 defconfig 之后）: ${BUILD_DATE}"
