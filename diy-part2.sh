@@ -119,6 +119,11 @@ chmod +x "$uci_dir/97-auto-network"
 cat > "$uci_dir/99-custom-settings" << 'EOF'
 #!/bin/sh
 
+# 使用全局标识位防止升级还原用户配置
+if [ "$(uci -q get system.@system[0].custom_inited)" = "1" ]; then
+    exit 0
+fi
+
 # 设置系统时区为中国上海
 uci set system.@system[0].timezone='CST-8'
 uci set system.@system[0].zonename='Asia/Shanghai'
@@ -196,6 +201,7 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.wg.input="ACCEPT"
 	uci set firewall.wg.output="ACCEPT"
 	uci set firewall.wg.forward="ACCEPT"
+	uci set firewall.wg.masq="1"
 	uci add_list firewall.wg.network="wg0"
 
 	# WAN 口放行 51820 UDP 端口
@@ -229,6 +235,9 @@ if ! uci -q get firewall.wg > /dev/null; then
 	grep -q "10.0.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
 fi
 
+uci set system.@system[0].custom_inited='1'
+uci commit system
+
 exit 0
 EOF
 chmod +x "$uci_dir/99-custom-settings"
@@ -256,6 +265,7 @@ openssl x509 -req -days 3650 -in /etc/openvpn/keys/client.csr -CA /etc/openvpn/k
 
 openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
 
+LAN_IP=$(uci -q get network.lan.ipaddr || echo "192.168.3.1")
 cat > /etc/openvpn/server.conf << CONEOF
 port 1194
 proto udp
@@ -270,7 +280,7 @@ cipher AES-256-GCM
 auth SHA256
 server 10.8.0.0 255.255.255.0
 push "redirect-gateway def1 bypass-dhcp"
-push "dhcp-option DNS 192.168.3.1"
+push "dhcp-option DNS $LAN_IP"
 keepalive 10 120
 persist-key
 persist-tun
@@ -294,6 +304,7 @@ uci set firewall.openvpn_zone.name='openvpn'
 uci set firewall.openvpn_zone.input='ACCEPT'
 uci set firewall.openvpn_zone.output='ACCEPT'
 uci set firewall.openvpn_zone.forward='ACCEPT'
+uci set firewall.openvpn_zone.masq='1'
 uci add_list firewall.openvpn_zone.device='tun+'
 
 uci set firewall.ovpn_lan_fwd='forwarding'
@@ -406,7 +417,7 @@ fi
 PRIV_KEY="$(cat $KEY_FILE)"
 SERVER_PUB="$(cat /etc/wireguard/server_public.key)"
 PORT="$(uci -q get network.wg0.listen_port 2>/dev/null || echo 51820)"
-DNS="192.168.3.1"
+DNS="$(uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.3.1)"
 
 printf '[Interface]\n'
 printf 'PrivateKey = %s\n' "$PRIV_KEY"
@@ -418,8 +429,9 @@ printf 'PublicKey = %s\n' "$SERVER_PUB"
 if [ "$DEVICE" = "phone" ]; then
     printf 'AllowedIPs = 0.0.0.0/0\n'
 else
-    # 电脑节点：仅路由内网与 VPN 网段，不影响本机原有外网访问
-    printf 'AllowedIPs = 192.168.3.0/24, 10.0.0.0/24\n'
+    # 电脑节点：提取网关所在 C 段自适应下发路由表
+    ROUTER_SUBNET="$(echo $DNS | cut -d'.' -f1,2,3).0/24"
+    printf 'AllowedIPs = %s, 10.0.0.0/24\n' "$ROUTER_SUBNET"
 fi
 printf 'Endpoint = %s:%s\n' "$DOMAIN" "$PORT"
 printf 'PersistentKeepalive = 25\n'
@@ -585,14 +597,17 @@ fi
 # 7. 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
 echo "CONFIG_PACKAGE_qrencode=y" >> .config
 
-# 8. 强制写入 OpenAppFilter 软件包
+# 8. 强制写入核心加密组件与第三方依赖包
+echo "CONFIG_PACKAGE_openssl-util=y" >> .config
+echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
 
 # 9. 修复“保留配置”升级时 OpenVPN 证书丢失的问题
 # 将 OpenVPN 的配置和证书目录加入系统升级的白名单中（保留配置升级时不会被清除）
 KEEP_D_DIR="package/base-files/files/lib/upgrade/keep.d"
 mkdir -p "$KEEP_D_DIR"
-echo "/etc/openvpn/" > "$KEEP_D_DIR/openvpn-custom"
+echo "/etc/openvpn/" > "$KEEP_D_DIR/vpn-custom"
+echo "/etc/wireguard/" >> "$KEEP_D_DIR/vpn-custom"
 
 
 # 10. 注入固件版本号，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
