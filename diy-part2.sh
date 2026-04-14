@@ -235,6 +235,14 @@ if ! uci -q get firewall.wg > /dev/null; then
 	grep -q "10.0.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
 fi
 
+# 开启 UPnP 与 NAT-PMP 服务
+if uci -q get upnpd.config > /dev/null; then
+	uci set upnpd.config.enabled='1'
+	uci set upnpd.config.enable_upnp='1'
+	uci set upnpd.config.enable_natpmp='1'
+	uci commit upnpd
+fi
+
 uci set system.@system[0].custom_inited='1'
 uci commit system
 
@@ -298,28 +306,25 @@ uci set firewall.openvpn_rule.name='Allow-OpenVPN'
 uci set firewall.openvpn_rule.src='wan'
 uci set firewall.openvpn_rule.dest_port='1194'
 uci set firewall.openvpn_rule.proto='udp'
+uci set firewall.openvpn_rule.target='ACCEPT'
 
-uci set firewall.openvpn_zone='zone'
-uci set firewall.openvpn_zone.name='openvpn'
-uci set firewall.openvpn_zone.input='ACCEPT'
-uci set firewall.openvpn_zone.output='ACCEPT'
-uci set firewall.openvpn_zone.forward='ACCEPT'
-uci set firewall.openvpn_zone.masq='1'
-uci add_list firewall.openvpn_zone.device='tun+'
+uci set network.ovpn='interface'
+uci set network.ovpn.proto='unmanaged'
+uci set network.ovpn.device='tun0'
+uci commit network
 
-uci set firewall.ovpn_lan_fwd='forwarding'
-uci set firewall.ovpn_lan_fwd.src='openvpn'
-uci set firewall.ovpn_lan_fwd.dest='lan'
+idx=0
+while uci -q get firewall.@zone[$idx] >/dev/null; do
+	if [ "$(uci -q get firewall.@zone[$idx].name)" = "lan" ]; then
+		uci add_list firewall.@zone[$idx].network='ovpn'
+		uci add_list firewall.@zone[$idx].device='tun+'
+		break
+	fi
+	idx=$((idx+1))
+done
 
-uci set firewall.ovpn_wan_fwd='forwarding'
-uci set firewall.ovpn_wan_fwd.src='openvpn'
-uci set firewall.ovpn_wan_fwd.dest='wan'
+grep -q "10.8.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
 
-uci set firewall.ovpn_lan_masq='nat'
-uci set firewall.ovpn_lan_masq.name='ovpn-to-lan'
-uci set firewall.ovpn_lan_masq.src='openvpn'
-uci set firewall.ovpn_lan_masq.dest='lan'
-uci set firewall.ovpn_lan_masq.target='MASQUERADE'
 uci commit firewall
 EOF
 chmod +x "$OVPN_SCRIPT"
@@ -601,6 +606,7 @@ echo "CONFIG_PACKAGE_qrencode=y" >> .config
 echo "CONFIG_PACKAGE_openssl-util=y" >> .config
 echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
 
 # 9. 修复“保留配置”升级时 OpenVPN 证书丢失的问题
 # 将 OpenVPN 的配置和证书目录加入系统升级的白名单中（保留配置升级时不会被清除）
