@@ -260,20 +260,59 @@ cat > "$OVPN_SCRIPT" << 'EOF'
 mkdir -p /etc/openvpn/keys
 chmod 700 /etc/openvpn/keys
 
+# ── 生成 CA ──────────────────────────────────────────────
 openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null
-openssl req -new -x509 -days 3650 -key /etc/openvpn/keys/ca.key -out /etc/openvpn/keys/ca.crt -subj "/CN=MyRouter-CA" 2>/dev/null
+openssl req -new -x509 -days 3650 \
+    -key /etc/openvpn/keys/ca.key \
+    -out /etc/openvpn/keys/ca.crt \
+    -subj "/CN=MyRouter-CA" 2>/dev/null
 
+# ── 生成服务端证书 ────────────────────────────────────────
 openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null
-openssl req -new -key /etc/openvpn/keys/server.key -out /etc/openvpn/keys/server.csr -subj "/CN=MyRouter-Server" 2>/dev/null
-openssl x509 -req -days 3650 -in /etc/openvpn/keys/server.csr -CA /etc/openvpn/keys/ca.crt -CAkey /etc/openvpn/keys/ca.key -CAcreateserial -out /etc/openvpn/keys/server.crt 2>/dev/null
+openssl req -new -key /etc/openvpn/keys/server.key \
+    -out /etc/openvpn/keys/server.csr \
+    -subj "/CN=MyRouter-Server" 2>/dev/null
+openssl x509 -req -days 3650 \
+    -in /etc/openvpn/keys/server.csr \
+    -CA /etc/openvpn/keys/ca.crt \
+    -CAkey /etc/openvpn/keys/ca.key \
+    -CAcreateserial \
+    -extfile <(printf 'extendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment') \
+    -out /etc/openvpn/keys/server.crt 2>/dev/null
 
+# ── 生成客户端证书 ────────────────────────────────────────
 openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null
-openssl req -new -key /etc/openvpn/keys/client.key -out /etc/openvpn/keys/client.csr -subj "/CN=MyPhone-Client" 2>/dev/null
-openssl x509 -req -days 3650 -in /etc/openvpn/keys/client.csr -CA /etc/openvpn/keys/ca.crt -CAkey /etc/openvpn/keys/ca.key -CAcreateserial -out /etc/openvpn/keys/client.crt 2>/dev/null
+openssl req -new -key /etc/openvpn/keys/client.key \
+    -out /etc/openvpn/keys/client.csr \
+    -subj "/CN=MyPhone-Client" 2>/dev/null
+openssl x509 -req -days 3650 \
+    -in /etc/openvpn/keys/client.csr \
+    -CA /etc/openvpn/keys/ca.crt \
+    -CAkey /etc/openvpn/keys/ca.key \
+    -CAcreateserial \
+    -extfile <(printf 'extendedKeyUsage=clientAuth') \
+    -out /etc/openvpn/keys/client.crt 2>/dev/null
 
-openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
+# ── 生成 TLS-Crypt 预共享密钥（替代 tls-auth，更安全且无方向歧义）────
+# openvpn --genkey tls-crypt-v2-server 在旧版本中不兼容
+# 使用 secret 关键字生成，tls-crypt 与 tls-auth 均可使用 secret 格式密钥
+openvpn --genkey --type tls-auth /etc/openvpn/keys/ta.key 2>/dev/null || \
+    openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
+chmod 600 /etc/openvpn/keys/ta.key
+chmod 600 /etc/openvpn/keys/ca.key /etc/openvpn/keys/server.key /etc/openvpn/keys/client.key
+
+# ── 禁用 tun 接口的反向路径过滤（rp_filter），否则返回包会被丢弃 ────
+for f in /proc/sys/net/ipv4/conf/all/rp_filter \
+          /proc/sys/net/ipv4/conf/default/rp_filter; do
+    echo 0 > "$f" 2>/dev/null || true
+done
+
+# ── 加载 tun 内核模块 ────────────────────────────────────
+modprobe tun 2>/dev/null || true
 
 LAN_IP=$(uci -q get network.lan.ipaddr || echo "192.168.3.1")
+
+# ── 写入服务端配置 ────────────────────────────────────────
 cat > /etc/openvpn/server.conf << CONEOF
 port 1194
 proto udp
@@ -283,47 +322,78 @@ cert /etc/openvpn/keys/server.crt
 key /etc/openvpn/keys/server.key
 dh none
 ecdh-curve prime256v1
-tls-auth /etc/openvpn/keys/ta.key 0
+tls-crypt /etc/openvpn/keys/ta.key
+tls-version-min 1.2
+remote-cert-tls client
 cipher AES-256-GCM
+ncp-ciphers AES-256-GCM:AES-128-GCM
 auth SHA256
 server 10.8.0.0 255.255.255.0
 push "redirect-gateway def1 bypass-dhcp"
 push "dhcp-option DNS $LAN_IP"
+push "route-metric 512"
 keepalive 10 120
 persist-key
 persist-tun
+explicit-exit-notify 1
 status /tmp/openvpn-status.log
+log-append /tmp/openvpn.log
 verb 3
 CONEOF
 
+# ── 注册 OpenVPN UCI ─────────────────────────────────────
 uci set openvpn.server=openvpn
 uci set openvpn.server.enabled='1'
 uci set openvpn.server.config='/etc/openvpn/server.conf'
 uci commit openvpn
 
-uci set firewall.openvpn_rule=rule
-uci set firewall.openvpn_rule.name='Allow-OpenVPN'
-uci set firewall.openvpn_rule.src='wan'
-uci set firewall.openvpn_rule.dest_port='1194'
-uci set firewall.openvpn_rule.proto='udp'
-uci set firewall.openvpn_rule.target='ACCEPT'
+# ── 在 /etc/sysctl.conf 追加 rp_filter 禁用（持久化）────
+grep -q 'net.ipv4.conf.all.rp_filter' /etc/sysctl.conf 2>/dev/null || \
+    echo 'net.ipv4.conf.all.rp_filter=0' >> /etc/sysctl.conf
+grep -q 'net.ipv4.conf.default.rp_filter' /etc/sysctl.conf 2>/dev/null || \
+    echo 'net.ipv4.conf.default.rp_filter=0' >> /etc/sysctl.conf
+grep -q 'net.ipv4.ip_forward' /etc/sysctl.conf 2>/dev/null || \
+    echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
 
+# ── 注册 ovpn 网络接口 (unmanaged，让 OpenVPN 自行管理 tun0) ────
 uci set network.ovpn='interface'
 uci set network.ovpn.proto='unmanaged'
 uci set network.ovpn.device='tun0'
 uci commit network
 
-idx=0
-while uci -q get firewall.@zone[$idx] >/dev/null; do
-	if [ "$(uci -q get firewall.@zone[$idx].name)" = "lan" ]; then
-		uci add_list firewall.@zone[$idx].network='ovpn'
-		uci add_list firewall.@zone[$idx].device='tun+'
-		break
-	fi
-	idx=$((idx+1))
-done
+# ── 独立的 OpenVPN 防火墙区域（关键：与 LAN zone 分开，配 masq）────
+# 不能把 tun+ 加入 LAN zone，那样无法 NAT 出去到 WAN
+uci set firewall.ovpn_zone='zone'
+uci set firewall.ovpn_zone.name='openvpn'
+uci set firewall.ovpn_zone.input='ACCEPT'
+uci set firewall.ovpn_zone.output='ACCEPT'
+uci set firewall.ovpn_zone.forward='ACCEPT'
+uci set firewall.ovpn_zone.masq='1'
+uci add_list firewall.ovpn_zone.network='ovpn'
+uci add_list firewall.ovpn_zone.device='tun+'
 
-grep -q "10.8.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
+# ovpn → wan 转发（客户端流量走 WAN 出去上网）
+uci set firewall.ovpn_wan='forwarding'
+uci set firewall.ovpn_wan.src='openvpn'
+uci set firewall.ovpn_wan.dest='wan'
+
+# ovpn → lan 转发（客户端可访问路由器内网）
+uci set firewall.ovpn_lan='forwarding'
+uci set firewall.ovpn_lan.src='openvpn'
+uci set firewall.ovpn_lan.dest='lan'
+
+# lan → ovpn 转发（内网主机可主动访问 VPN 客户端）
+uci set firewall.lan_ovpn='forwarding'
+uci set firewall.lan_ovpn.src='lan'
+uci set firewall.lan_ovpn.dest='openvpn'
+
+# WAN 放行 1194 UDP
+uci set firewall.openvpn_rule='rule'
+uci set firewall.openvpn_rule.name='Allow-OpenVPN'
+uci set firewall.openvpn_rule.src='wan'
+uci set firewall.openvpn_rule.dest_port='1194'
+uci set firewall.openvpn_rule.proto='udp'
+uci set firewall.openvpn_rule.target='ACCEPT'
 
 uci commit firewall
 EOF
@@ -335,19 +405,42 @@ mkdir -p package/base-files/files/bin
 cat > package/base-files/files/bin/gen-ovpn-client << 'EOF'
 #!/bin/sh
 if [ ! -f /etc/openvpn/keys/ca.crt ]; then
+    echo "# 证书尚未生成，请等待首次开机初始化完成后重试" >&2
     exit 1
 fi
 
-printf "client\ndev tun\nproto udp\n"
-printf "remote YOUR-DDNS-DOMAIN.COM 1194\n"
-printf "resolv-retry infinite\nnobind\n"
-printf "persist-key\npersist-tun\n"
-printf "cipher AES-256-GCM\nauth SHA256\n"
-printf "key-direction 1\nverb 3\n\n"
-printf "<ca>\n"; cat /etc/openvpn/keys/ca.crt; printf "</ca>\n\n"
-printf "<cert>\n"; cat /etc/openvpn/keys/client.crt; printf "</cert>\n\n"
-printf "<key>\n"; cat /etc/openvpn/keys/client.key; printf "</key>\n\n"
-printf "<tls-auth>\n"; cat /etc/openvpn/keys/ta.key; printf "</tls-auth>\n"
+# 获取 DDNS 域名参数（可选，不传则留占位符）
+REMOTE="${1:-YOUR-DDNS-DOMAIN.COM}"
+
+# 提取只含 BEGIN/END CERTIFICATE 的 PEM 块（去除链式证书中的中间证书）
+CA_CERT=$(openssl x509 -in /etc/openvpn/keys/ca.crt 2>/dev/null)
+CLIENT_CERT=$(openssl x509 -in /etc/openvpn/keys/client.crt 2>/dev/null)
+
+printf 'client\n'
+printf 'dev tun\n'
+printf 'proto udp\n'
+printf 'remote %s 1194\n' "$REMOTE"
+printf 'resolv-retry infinite\n'
+printf 'nobind\n'
+printf 'persist-key\n'
+printf 'persist-tun\n'
+printf 'remote-cert-tls server\n'
+printf 'tls-version-min 1.2\n'
+printf 'cipher AES-256-GCM\n'
+printf 'ncp-ciphers AES-256-GCM:AES-128-GCM\n'
+printf 'auth SHA256\n'
+printf 'key-direction 1\n'
+printf 'verb 3\n'
+printf 'mute 20\n'
+printf 'keepalive 10 60\n'
+printf '\n'
+printf '<ca>\n'; printf '%s\n' "$CA_CERT"; printf '</ca>\n'
+printf '\n'
+printf '<cert>\n'; printf '%s\n' "$CLIENT_CERT"; printf '</cert>\n'
+printf '\n'
+printf '<key>\n'; cat /etc/openvpn/keys/client.key; printf '</key>\n'
+printf '\n'
+printf '<tls-crypt>\n'; cat /etc/openvpn/keys/ta.key; printf '</tls-crypt>\n'
 EOF
 chmod +x package/base-files/files/bin/gen-ovpn-client
 
