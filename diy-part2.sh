@@ -750,10 +750,12 @@ DISTRIB_AUTHOR="夏昸"
 DISTRIB_PROJECT="https://github.com/suifeng009/openwrt"
 REOF
 
-# 14. 自定义 Argon 登录页底部 Footer（覆盖主题原版 footer_login.htm）
-ARGON_VIEW="package/base-files/files/usr/lib/lua/luci/view/themes/argon"
-mkdir -p "$ARGON_VIEW"
-cat > "$ARGON_VIEW/footer_login.htm" << 'EOF'
+# 14. 自定义 Argon 登录页底部 Footer（直接覆写主题源码，避免与 base-files 文件冲突）
+# argon 主题由 feeds 提供，其源码路径为 feeds/luci/themes/luci-theme-argon
+# 直接写入该路径，文件归属仍属于 argon 包，不会触发 check_data_file_clashes
+ARGON_FOOTER="feeds/luci/themes/luci-theme-argon/luasrc/view/themes/argon/footer_login.htm"
+if [ -f "$ARGON_FOOTER" ]; then
+  cat > "$ARGON_FOOTER" << 'EOF'
 <%
 local ver = require "luci.version"
 %>
@@ -762,3 +764,4 @@ local ver = require "luci.version"
   <span> <%= ver.distversion %></span>
 </div>
 EOF
+fi
