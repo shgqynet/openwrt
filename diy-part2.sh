@@ -330,7 +330,8 @@ ncp-ciphers AES-256-GCM:AES-128-GCM
 auth SHA256
 server 10.8.0.0 255.255.255.0
 push "redirect-gateway def1 bypass-dhcp"
-push "dhcp-option DNS $LAN_IP"
+push "dhcp-option DNS 114.114.114.114"
+push "dhcp-option DNS 8.8.8.8"
 push "route-metric 512"
 keepalive 10 120
 persist-key
@@ -700,6 +701,9 @@ echo "CONFIG_PACKAGE_openssl-util=y" >> .config
 echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+echo "CONFIG_PACKAGE_openvpn-openssl=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-openvpn=y" >> .config
 
 # 9. 修复“保留配置”升级时 OpenVPN 证书丢失的问题
 # 将 OpenVPN 的配置和证书目录加入系统升级的白名单中（保留配置升级时不会被清除）
