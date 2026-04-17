@@ -152,56 +152,69 @@ uci commit network
 # --- 自动配置 WireGuard 基础环境接口与防火墙 ---
 # 判断 wg0 接口是否存在，防止系统升级保留配置时覆盖原有密钥等数据
 if ! uci -q get network.wg0 > /dev/null; then
-	# 1. 生成服务端私钥及两个客户端密钥对
+	# 1. 生成服务端、客户端密钥，以及预共享密钥(PSK)增加抗量子攻击安全性
 	WG_SERVER_PRIV="$(wg genkey)"
-	WG_CLIENT_PRIV="$(wg genkey)"
-	WG_CLIENT_PUB="$(echo "$WG_CLIENT_PRIV" | wg pubkey)"
+	WG_SERVER_PUB="$(echo "$WG_SERVER_PRIV" | wg pubkey)"
+
+	WG_PHONE_PRIV="$(wg genkey)"
+	WG_PHONE_PUB="$(echo "$WG_PHONE_PRIV" | wg pubkey)"
+	WG_PHONE_PSK="$(wg genpsk)"
+
 	WG_PC_PRIV="$(wg genkey)"
 	WG_PC_PUB="$(echo "$WG_PC_PRIV" | wg pubkey)"
+	WG_PC_PSK="$(wg genpsk)"
 
 	# 2. 建立 wg0 接口，注入服务端私钥
 	uci set network.wg0="interface"
 	uci set network.wg0.proto="wireguard"
 	uci set network.wg0.private_key="$WG_SERVER_PRIV"
 	uci set network.wg0.listen_port="51820"
-	uci set network.wg0.mtu="1280"
+	uci set network.wg0.mtu="1420"
 	uci add_list network.wg0.addresses="10.0.0.1/24"
 
 	# 3. 手机节点 MyPhone（10.0.0.2），全流量走隧道
 	uci set network.wg_client_phone="wireguard_wg0"
 	uci set network.wg_client_phone.description="MyPhone"
-	uci set network.wg_client_phone.public_key="$WG_CLIENT_PUB"
+	uci set network.wg_client_phone.public_key="$WG_PHONE_PUB"
+	uci set network.wg_client_phone.preshared_key="$WG_PHONE_PSK"
 	uci set network.wg_client_phone.route_allowed_ips="1"
-	uci set network.wg_client_phone.persistent_keepalive="25"
 	uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
 
 	# 4. 电脑节点 MyPC（10.0.0.3），仅隧道内网段流量
 	uci set network.wg_client_pc="wireguard_wg0"
 	uci set network.wg_client_pc.description="MyPC"
 	uci set network.wg_client_pc.public_key="$WG_PC_PUB"
+	uci set network.wg_client_pc.preshared_key="$WG_PC_PSK"
 	uci set network.wg_client_pc.route_allowed_ips="1"
-	uci set network.wg_client_pc.persistent_keepalive="25"
 	uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
 	uci commit network
 
-	# 保存所有密钥文件（客户端私钥 + 服务端公钥），供配置下载页面使用
+	# 保存所有密钥供 LuCI 页面生成客户端配置使用
 	mkdir -p /etc/wireguard
-	printf '%s\n' "$WG_CLIENT_PRIV" > /etc/wireguard/phone_client.key
-	printf '%s\n' "$WG_PC_PRIV"     > /etc/wireguard/pc_client.key
+	cat > /etc/wireguard/phone.info <<EOF
+PRIV_KEY="$WG_PHONE_PRIV"
+PSK="$WG_PHONE_PSK"
+EOF
+
+	cat > /etc/wireguard/pc.info <<EOF
+PRIV_KEY="$WG_PC_PRIV"
+PSK="$WG_PC_PSK"
+EOF
+
 	# 服务端公钥：客户端配置中的 [Peer] PublicKey 字段需要用到它
-	printf '%s\n' "$(echo "$WG_SERVER_PRIV" | wg pubkey)" > /etc/wireguard/server_public.key
-	chmod 600 /etc/wireguard/phone_client.key /etc/wireguard/pc_client.key
+	echo "$WG_SERVER_PUB" > /etc/wireguard/server_public.key
+
+	chmod 600 /etc/wireguard/*.info
 	chmod 644 /etc/wireguard/server_public.key
 fi
 
 if ! uci -q get firewall.wg > /dev/null; then
-	# 5. 建立 WireGuard 防火墙区域（不开 masq，由 lan zone 负责 NAT）
+	# 5. 建立 WireGuard 防火墙区域（直接互通，依托 OpenWrt 原生路由回包，无需 MASQUERADE）
 	uci set firewall.wg="zone"
 	uci set firewall.wg.name="wireguard"
 	uci set firewall.wg.input="ACCEPT"
 	uci set firewall.wg.output="ACCEPT"
 	uci set firewall.wg.forward="ACCEPT"
-	uci set firewall.wg.masq="1"
 	uci add_list firewall.wg.network="wg0"
 
 	# WAN 口放行 51820 UDP 端口
@@ -221,18 +234,12 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.lan_wg_forward.src="lan"
 	uci set firewall.lan_wg_forward.dest="wireguard"
 	
+	# 允许 wg 节点访问外网 (WAN 口默认带有 Masquerade，所以外网访问会自动转换)
 	uci set firewall.wg_wan_forward="forwarding"
 	uci set firewall.wg_wan_forward.src="wireguard"
 	uci set firewall.wg_wan_forward.dest="wan"
 
-	uci set firewall.wg_lan_masq="nat"
-	uci set firewall.wg_lan_masq.name="wg-to-lan"
-	uci set firewall.wg_lan_masq.src="wireguard"
-	uci set firewall.wg_lan_masq.dest="lan"
-	uci set firewall.wg_lan_masq.target="MASQUERADE"
 	uci commit firewall
-
-	grep -q "10.0.0.0/24" /etc/firewall.user 2>/dev/null || echo "iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o br-lan -j MASQUERADE" >> /etc/firewall.user
 fi
 
 # 开启 UPnP 与 NAT-PMP 服务
@@ -258,6 +265,50 @@ if ! uci -q get firewall.softether > /dev/null; then
 	uci commit firewall
 fi
 
+# --- 配置 ZeroTier 基础环境与防火墙 ---
+if ! uci -q get zerotier.sample_config > /dev/null; then
+	uci set zerotier.mynet=network
+	uci set zerotier.mynet.enabled='0'
+	uci set zerotier.mynet.nat='1'
+	uci commit zerotier
+fi
+
+if ! uci -q get firewall.zerotier > /dev/null; then
+	uci set firewall.zerotier=zone
+	uci set firewall.zerotier.name='zerotier'
+	uci set firewall.zerotier.input='ACCEPT'
+	uci set firewall.zerotier.output='ACCEPT'
+	uci set firewall.zerotier.forward='ACCEPT'
+	uci set firewall.zerotier.masq='1'
+	uci set firewall.zerotier.mtu_fix='1'
+	uci add_list firewall.zerotier.network='zt0'
+
+	uci set firewall.zt_lan_fwd=forwarding
+	uci set firewall.zt_lan_fwd.src='zerotier'
+	uci set firewall.zt_lan_fwd.dest='lan'
+
+	uci set firewall.lan_zt_fwd=forwarding
+	uci set firewall.lan_zt_fwd.src='lan'
+	uci set firewall.lan_zt_fwd.dest='zerotier'
+
+	# 放行 ZeroTier UDP 端口 (9993) 协助打洞
+	uci set firewall.zt_rule=rule
+	uci set firewall.zt_rule.name='Allow-ZeroTier-External'
+	uci set firewall.zt_rule.src='wan'
+	uci set firewall.zt_rule.proto='udp'
+	uci set firewall.zt_rule.dest_port='9993'
+	uci set firewall.zt_rule.target='ACCEPT'
+	uci commit firewall
+fi
+
+# 在网络接口中预设 zt0
+if ! uci -q get network.zt0 > /dev/null; then
+	uci set network.zt0=interface
+	uci set network.zt0.proto='none'
+	uci set network.zt0.device='zt+'
+	uci commit network
+fi
+
 uci set system.@system[0].custom_inited='1'
 uci commit system
 
@@ -269,7 +320,7 @@ chmod +x "$uci_dir/99-custom-settings"
 
 # --- WireGuard 客户端配置下载功能 ---
 # 用户在 LuCI 页面输入 DDNS 域名，即可获得完整的客户端 .conf 文件和二维码
-# 服务端公钥、客户端私钥均在首次启动时自动生成并保存
+# 服务端公钥、客户端预共享密钥均在首次启动时自动生成并保存
 
 # 1. 核心生成脚本：/bin/gen-wg-client <phone|pc> <domain>
 mkdir -p package/base-files/files/bin
@@ -279,23 +330,10 @@ cat > package/base-files/files/bin/gen-wg-client << 'EOF'
 DEVICE="${1:-phone}"
 DOMAIN="${2:-your-domain.example.com}"
 
-case "$DEVICE" in
-    phone)
-        KEY_FILE="/etc/wireguard/phone_client.key"
-        CLIENT_IP="10.0.0.2/32"
-        ;;
-    pc)
-        KEY_FILE="/etc/wireguard/pc_client.key"
-        CLIENT_IP="10.0.0.3/32"
-        ;;
-    *)
-        echo "Error: unknown device type '$DEVICE'" >&2
-        exit 1
-        ;;
-esac
+INFO_FILE="/etc/wireguard/${DEVICE}.info"
 
-if [ ! -f "$KEY_FILE" ]; then
-    echo "Error: key file not found: $KEY_FILE" >&2
+if [ ! -f "$INFO_FILE" ]; then
+    echo "Error: device info not found: $INFO_FILE" >&2
     echo "System may not have completed first-boot initialization yet." >&2
     exit 1
 fi
@@ -304,10 +342,20 @@ if [ ! -f "/etc/wireguard/server_public.key" ]; then
     exit 1
 fi
 
-PRIV_KEY="$(cat $KEY_FILE)"
+. "$INFO_FILE"
 SERVER_PUB="$(cat /etc/wireguard/server_public.key)"
 PORT="$(uci -q get network.wg0.listen_port 2>/dev/null || echo 51820)"
 DNS="$(uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.3.1)"
+
+if [ "$DEVICE" = "phone" ]; then
+    CLIENT_IP="10.0.0.2/32"
+    ALLOWED_IPS="0.0.0.0/0"
+else
+    CLIENT_IP="10.0.0.3/32"
+    # 电脑节点：提取网关所在 C 段自适应下发路由表
+    ROUTER_SUBNET="$(echo $DNS | cut -d'.' -f1,2,3).0/24"
+    ALLOWED_IPS="${ROUTER_SUBNET}, 10.0.0.0/24"
+fi
 
 printf '[Interface]\n'
 printf 'PrivateKey = %s\n' "$PRIV_KEY"
@@ -316,13 +364,8 @@ printf 'DNS = %s\n' "$DNS"
 printf '\n'
 printf '[Peer]\n'
 printf 'PublicKey = %s\n' "$SERVER_PUB"
-if [ "$DEVICE" = "phone" ]; then
-    printf 'AllowedIPs = 0.0.0.0/0\n'
-else
-    # 电脑节点：提取网关所在 C 段自适应下发路由表
-    ROUTER_SUBNET="$(echo $DNS | cut -d'.' -f1,2,3).0/24"
-    printf 'AllowedIPs = %s, 10.0.0.0/24\n' "$ROUTER_SUBNET"
-fi
+printf 'PresharedKey = %s\n' "$PSK"
+printf 'AllowedIPs = %s\n' "$ALLOWED_IPS"
 printf 'Endpoint = %s:%s\n' "$DOMAIN" "$PORT"
 printf 'PersistentKeepalive = 25\n'
 EOF
@@ -393,15 +436,12 @@ function action_index()
         local safe_cmd1 = "/bin/gen-wg-client " .. util.shellquote(device) .. " " .. util.shellquote(domain) .. " 2>/dev/null"
         conf_text = sys.exec(safe_cmd1)
         if conf_text and conf_text ~= "" then
-            -- 生成 SVG 二维码（qrencode 已内置）
-            local tmp = "/tmp/wg_qr_" .. device .. ".svg"
-            local safe_cmd2 = "/bin/gen-wg-client " .. util.shellquote(device) .. " " .. util.shellquote(domain) .. " 2>/dev/null | qrencode -t SVG -o " .. util.shellquote(tmp)
-            os.execute(safe_cmd2)
-            local f = io.open(tmp, "r")
+            -- 生成 SVG 二维码（qrencode -o - 直接输出到 stdout，避免写磁盘开销）
+            local safe_cmd2 = "/bin/gen-wg-client " .. util.shellquote(device) .. " " .. util.shellquote(domain) .. " 2>/dev/null | qrencode -t SVG -o -"
+            local f = io.popen(safe_cmd2, "r")
             if f then
                 qr_b64 = f:read("*a")
                 f:close()
-                os.remove(tmp)
             end
         end
     end
@@ -490,9 +530,14 @@ echo "CONFIG_PACKAGE_qrencode=y" >> .config
 # 8. 强制写入核心加密组件与第三方依赖包
 echo "CONFIG_PACKAGE_openssl-util=y" >> .config
 echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
+echo "CONFIG_PACKAGE_kmod-wireguard=y" >> .config
+echo "CONFIG_PACKAGE_luci-proto-wireguard=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
 echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+echo "CONFIG_PACKAGE_zerotier=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-server=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-bridge=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-client=y" >> .config
