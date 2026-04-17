@@ -27,7 +27,6 @@ echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
 echo "CONFIG_PACKAGE_kmod-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-proto-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
-echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
 echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
 echo "CONFIG_PACKAGE_zerotier=y" >> .config
