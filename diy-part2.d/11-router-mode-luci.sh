@@ -140,6 +140,7 @@ function action_index()
     local http = require "luci.http"
     local uci  = require "luci.model.uci".cursor()
     local sys  = require "luci.sys"
+    local util = require "luci.util"
 
     local current_gateway = uci:get("network", "lan", "gateway")
     local current_ip      = uci:get("network", "lan", "ipaddr") or "192.168.1.1"
@@ -161,7 +162,7 @@ function action_index()
             
             if side_ip ~= "" and gw_ip ~= "" then
                 -- 核心解决 BUG 1: Lua 只负责发送指令立刻退出，并把控制权交给底层脚本自身剥离
-                sys.exec("/usr/bin/router-mode side " .. sys.net.ipv4bcast(side_ip) .. " " .. sys.net.ipv4bcast(gw_ip) .. " " .. disable_dhcp .. " " .. enable_masq .. " &")
+                sys.exec("/usr/bin/router-mode side " .. util.shellquote(side_ip) .. " " .. util.shellquote(gw_ip) .. " " .. util.shellquote(disable_dhcp) .. " " .. util.shellquote(enable_masq) .. " &")
             end
         elseif req_mode == "main" then
             sys.exec("/usr/bin/router-mode main &")
