@@ -29,7 +29,7 @@ EOF
 # 写入 LuCI 概览页厂商/项目信息（官方 CONFIG_VERSION_* 字段）
 sed -i '/^CONFIG_VERSION_MANUFACTURER=/d' .config
 sed -i '/^CONFIG_VERSION_BUG_URL=/d' .config
-echo 'CONFIG_VERSION_MANUFACTURER="夏昸 OpenWrt"' >> .config
+echo 'CONFIG_VERSION_MANUFACTURER="夏风拂尽千重网，昸日长明万卷云。"' >> .config
 echo 'CONFIG_VERSION_BUG_URL="https://github.com/suifeng009/openwrt"' >> .config
 
 # 在固件元信息文件追加自定义作者字段（供脚本/插件读取）
@@ -52,8 +52,19 @@ if [ -f "$ARGON_FOOTER" ]; then
 local ver = require "luci.version"
 %>
 <div class="login-footer">
-  <span><a href="https://github.com/suifeng009/openwrt" target="_blank">夏昸 OpenWrt</a></span>
+        <span><a href="https://github.com/suifeng009/openwrt" target="_blank">夏风拂尽千重网，昸日长明万卷云。</a></span>
   <span> <%= ver.distversion %></span>
 </div>
 EOF
 fi
+
+# 修改主界面页脚为自定义超链接与诗句 (解决多链接问题)
+# 1. 移除原有的 Powered by LuCI 和 ArgonTheme 链接区域
+find feeds/luci/themes/luci-theme-argon/ -type f -name "footer*" | xargs -i sed -i 's/<a.*Powered by.*<\/a>//g' {}
+find feeds/luci/themes/luci-theme-argon/ -type f -name "footer*" | xargs -i sed -i 's/<a.*ArgonTheme.*<\/a>//g' {}
+find feeds/luci/themes/luci-theme-argon/ -type f -name "footer*" | xargs -i sed -i 's/<span class="footer-separator">|<\/span>//g' {}
+
+# 2. 将发行版版本区域替换为你的专属诗句链接
+# 适配 23.05 的 ucode 模板 (.ut) 和 传统模板 (.htm)
+find feeds/luci/themes/luci-theme-argon/ -type f -name "footer*" | xargs -i sed -i 's/{{ version.distname }} {{ version.distversion }}-{{ version.distrevision }}/<a href="https:\/\/github.com\/suifeng009\/openwrt" target="_blank">夏风拂尽千重网，昸日长明万卷云。<\/a>/g' {}
+find feeds/luci/themes/luci-theme-argon/ -type f -name "footer*" | xargs -i sed -i 's/<%=ver.distname%> <%=ver.distversion%> (.*)/<a href="https:\/\/github.com\/suifeng009\/openwrt" target="_blank">夏风拂尽千重网，昸日长明万卷云。<\/a>/g' {}
