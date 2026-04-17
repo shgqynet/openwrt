@@ -143,21 +143,23 @@ mkdir -p package/base-files/files/usr/lib/lua/luci/view
 cat > package/base-files/files/usr/lib/lua/luci/view/wg_client_dl.htm << 'HTEOF'
 <%+header%>
 <style>
-.wg-card{background:#1e293b;border-radius:12px;padding:24px;margin-bottom:20px;color:#e2e8f0}
-.wg-card h3{margin:0 0 16px;color:#7dd3fc;font-size:1.1em}
-.wg-form label{display:block;margin-bottom:6px;font-size:.9em;color:#94a3b8}
+.wg-card{background:#ffffff;border-radius:12px;padding:24px;margin-bottom:20px;color:#1e293b;box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);border:1px solid #e2e8f0}
+.wg-card h3{margin:0 0 16px;color:#0f172a;font-size:1.1em;border-bottom:2px solid #f1f5f9;padding-bottom:10px;font-weight:600}
+.wg-form label{display:block;margin-bottom:6px;font-size:.95em;color:#475569;font-weight:500}
 .wg-form input,.wg-form select{width:100%;padding:10px 14px;border-radius:8px;
-  border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:.95em;box-sizing:border-box}
-.wg-form input:focus,.wg-form select:focus{outline:none;border-color:#38bdf8}
-.wg-btn{display:inline-block;padding:10px 22px;border-radius:8px;border:none;
-  cursor:pointer;font-size:.95em;margin-right:10px;margin-top:12px}
-.wg-btn-preview{background:#0ea5e9;color:#fff}
+  border:1px solid #cbd5e1;background:#f8fafc;color:#1e293b;font-size:.95em;box-sizing:border-box;transition:all 0.2s}
+.wg-form input:focus,.wg-form select:focus{outline:none;border-color:#3b82f6;background:#ffffff;box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1)}
+.wg-btn{display:inline-block;padding:12px 22px;border-radius:8px;border:none;
+  cursor:pointer;font-size:.95em;font-weight:500;margin-right:10px;margin-top:12px;transition:background 0.2s}
+.wg-btn-preview{background:#3b82f6;color:#fff}
 .wg-btn-dl{background:#10b981;color:#fff}
-.wg-pre{background:#0f172a;border-radius:8px;padding:16px;font-family:monospace;
-  font-size:.85em;white-space:pre;overflow-x:auto;color:#86efac;border:1px solid #1e3a4a}
+.wg-btn-preview:hover{background:#2563eb}
+.wg-btn-dl:hover{background:#059669}
+.wg-pre{background:#f8fafc;border-radius:8px;padding:16px;font-family:monospace;
+  font-size:.85em;white-space:pre;overflow-x:auto;color:#1e293b;border:1px solid #e2e8f0}
 .wg-qr{text-align:center;margin-top:16px}
-.wg-qr svg{max-width:220px;height:auto;background:#fff;padding:10px;border-radius:8px}
-.wg-tip{font-size:.83em;color:#64748b;margin-top:8px}
+.wg-qr svg{max-width:220px;height:auto;background:#fff;padding:10px;border-radius:8px;border:1px solid #e2e8f0}
+.wg-tip{font-size:.85em;color:#64748b;margin-top:8px}
 </style>
 <h2><%-translate("WireGuard 客户端配置")%></h2>
 <div class="wg-card">
