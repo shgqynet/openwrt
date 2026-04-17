@@ -243,6 +243,21 @@ if uci -q get upnpd.config > /dev/null; then
 	uci commit upnpd
 fi
 
+# --- 配置 SoftEther VPN 防火墙 ---
+if ! uci -q get firewall.softether > /dev/null; then
+	uci set firewall.softether="rule"
+	uci set firewall.softether.name="Allow-SoftEther"
+	uci set firewall.softether.src="wan"
+	uci add_list firewall.softether.dest_port="443"
+	uci add_list firewall.softether.dest_port="992"
+	uci add_list firewall.softether.dest_port="5555"
+	uci add_list firewall.softether.dest_port="500"
+	uci add_list firewall.softether.dest_port="4500"
+	uci set firewall.softether.proto="tcp udp"
+	uci set firewall.softether.target="ACCEPT"
+	uci commit firewall
+fi
+
 uci set system.@system[0].custom_inited='1'
 uci commit system
 
@@ -250,231 +265,7 @@ exit 0
 EOF
 chmod +x "$uci_dir/99-custom-settings"
 
-# 预置 OpenVPN 服务端自动初始化脚本
-OVPN_SCRIPT="$uci_dir/98-openvpn-setup"
 
-cat > "$OVPN_SCRIPT" << 'EOF'
-#!/bin/sh
-[ -f /etc/openvpn/keys/ca.crt ] && exit 0
-
-mkdir -p /etc/openvpn/keys
-chmod 700 /etc/openvpn/keys
-
-# ── 生成 CA ──────────────────────────────────────────────
-openssl genrsa -out /etc/openvpn/keys/ca.key 2048 2>/dev/null
-openssl req -new -x509 -days 3650 \
-    -key /etc/openvpn/keys/ca.key \
-    -out /etc/openvpn/keys/ca.crt \
-    -subj "/CN=MyRouter-CA" 2>/dev/null
-
-# ── 生成服务端证书 ────────────────────────────────────────
-openssl genrsa -out /etc/openvpn/keys/server.key 2048 2>/dev/null
-openssl req -new -key /etc/openvpn/keys/server.key \
-    -out /etc/openvpn/keys/server.csr \
-    -subj "/CN=MyRouter-Server" 2>/dev/null
-openssl x509 -req -days 3650 \
-    -in /etc/openvpn/keys/server.csr \
-    -CA /etc/openvpn/keys/ca.crt \
-    -CAkey /etc/openvpn/keys/ca.key \
-    -CAcreateserial \
-    -extfile <(printf 'extendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment') \
-    -out /etc/openvpn/keys/server.crt 2>/dev/null
-
-# ── 生成客户端证书 ────────────────────────────────────────
-openssl genrsa -out /etc/openvpn/keys/client.key 2048 2>/dev/null
-openssl req -new -key /etc/openvpn/keys/client.key \
-    -out /etc/openvpn/keys/client.csr \
-    -subj "/CN=MyPhone-Client" 2>/dev/null
-openssl x509 -req -days 3650 \
-    -in /etc/openvpn/keys/client.csr \
-    -CA /etc/openvpn/keys/ca.crt \
-    -CAkey /etc/openvpn/keys/ca.key \
-    -CAcreateserial \
-    -extfile <(printf 'extendedKeyUsage=clientAuth') \
-    -out /etc/openvpn/keys/client.crt 2>/dev/null
-
-# ── 生成 TLS-Crypt 预共享密钥（替代 tls-auth，更安全且无方向歧义）────
-# openvpn --genkey tls-crypt-v2-server 在旧版本中不兼容
-# 使用 secret 关键字生成，tls-crypt 与 tls-auth 均可使用 secret 格式密钥
-openvpn --genkey --type tls-auth /etc/openvpn/keys/ta.key 2>/dev/null || \
-    openvpn --genkey secret /etc/openvpn/keys/ta.key 2>/dev/null
-chmod 600 /etc/openvpn/keys/ta.key
-chmod 600 /etc/openvpn/keys/ca.key /etc/openvpn/keys/server.key /etc/openvpn/keys/client.key
-
-# ── 禁用 tun 接口的反向路径过滤（rp_filter），否则返回包会被丢弃 ────
-for f in /proc/sys/net/ipv4/conf/all/rp_filter \
-          /proc/sys/net/ipv4/conf/default/rp_filter; do
-    echo 0 > "$f" 2>/dev/null || true
-done
-
-# ── 加载 tun 内核模块 ────────────────────────────────────
-modprobe tun 2>/dev/null || true
-
-LAN_IP=$(uci -q get network.lan.ipaddr || echo "192.168.3.1")
-
-# ── 写入服务端配置 ────────────────────────────────────────
-cat > /etc/openvpn/server.conf << CONEOF
-port 1194
-proto udp
-dev tun
-ca /etc/openvpn/keys/ca.crt
-cert /etc/openvpn/keys/server.crt
-key /etc/openvpn/keys/server.key
-dh none
-ecdh-curve prime256v1
-tls-crypt /etc/openvpn/keys/ta.key
-tls-version-min 1.2
-remote-cert-tls client
-cipher AES-256-GCM
-ncp-ciphers AES-256-GCM:AES-128-GCM
-auth SHA256
-server 10.8.0.0 255.255.255.0
-push "redirect-gateway def1 bypass-dhcp"
-push "dhcp-option DNS 114.114.114.114"
-push "dhcp-option DNS 8.8.8.8"
-push "route-metric 512"
-keepalive 10 120
-persist-key
-persist-tun
-explicit-exit-notify 1
-status /tmp/openvpn-status.log
-log-append /tmp/openvpn.log
-verb 3
-CONEOF
-
-# ── 注册 OpenVPN UCI ─────────────────────────────────────
-uci set openvpn.server=openvpn
-uci set openvpn.server.enabled='1'
-uci set openvpn.server.config='/etc/openvpn/server.conf'
-uci commit openvpn
-
-# ── 在 /etc/sysctl.conf 追加 rp_filter 禁用（持久化）────
-grep -q 'net.ipv4.conf.all.rp_filter' /etc/sysctl.conf 2>/dev/null || \
-    echo 'net.ipv4.conf.all.rp_filter=0' >> /etc/sysctl.conf
-grep -q 'net.ipv4.conf.default.rp_filter' /etc/sysctl.conf 2>/dev/null || \
-    echo 'net.ipv4.conf.default.rp_filter=0' >> /etc/sysctl.conf
-grep -q 'net.ipv4.ip_forward' /etc/sysctl.conf 2>/dev/null || \
-    echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
-
-# ── 注册 ovpn 网络接口 (unmanaged，让 OpenVPN 自行管理 tun0) ────
-uci set network.ovpn='interface'
-uci set network.ovpn.proto='unmanaged'
-uci set network.ovpn.device='tun0'
-uci commit network
-
-# ── 独立的 OpenVPN 防火墙区域（关键：与 LAN zone 分开，配 masq）────
-# 不能把 tun+ 加入 LAN zone，那样无法 NAT 出去到 WAN
-uci set firewall.ovpn_zone='zone'
-uci set firewall.ovpn_zone.name='openvpn'
-uci set firewall.ovpn_zone.input='ACCEPT'
-uci set firewall.ovpn_zone.output='ACCEPT'
-uci set firewall.ovpn_zone.forward='ACCEPT'
-uci set firewall.ovpn_zone.masq='1'
-uci add_list firewall.ovpn_zone.network='ovpn'
-uci add_list firewall.ovpn_zone.device='tun+'
-
-# ovpn → wan 转发（客户端流量走 WAN 出去上网）
-uci set firewall.ovpn_wan='forwarding'
-uci set firewall.ovpn_wan.src='openvpn'
-uci set firewall.ovpn_wan.dest='wan'
-
-# ovpn → lan 转发（客户端可访问路由器内网）
-uci set firewall.ovpn_lan='forwarding'
-uci set firewall.ovpn_lan.src='openvpn'
-uci set firewall.ovpn_lan.dest='lan'
-
-# lan → ovpn 转发（内网主机可主动访问 VPN 客户端）
-uci set firewall.lan_ovpn='forwarding'
-uci set firewall.lan_ovpn.src='lan'
-uci set firewall.lan_ovpn.dest='openvpn'
-
-# WAN 放行 1194 UDP
-uci set firewall.openvpn_rule='rule'
-uci set firewall.openvpn_rule.name='Allow-OpenVPN'
-uci set firewall.openvpn_rule.src='wan'
-uci set firewall.openvpn_rule.dest_port='1194'
-uci set firewall.openvpn_rule.proto='udp'
-uci set firewall.openvpn_rule.target='ACCEPT'
-
-uci commit firewall
-EOF
-chmod +x "$OVPN_SCRIPT"
-
-# --- 提供 Web UI (LuCI) 一键下载 OpenVPN 配置文件的功能 ---
-# 1. 核心生成脚本
-mkdir -p package/base-files/files/bin
-cat > package/base-files/files/bin/gen-ovpn-client << 'EOF'
-#!/bin/sh
-if [ ! -f /etc/openvpn/keys/ca.crt ]; then
-    echo "# 证书尚未生成，请等待首次开机初始化完成后重试" >&2
-    exit 1
-fi
-
-# 获取 DDNS 域名参数（可选，不传则留占位符）
-REMOTE="${1:-YOUR-DDNS-DOMAIN.COM}"
-
-# 提取只含 BEGIN/END CERTIFICATE 的 PEM 块（去除链式证书中的中间证书）
-CA_CERT=$(openssl x509 -in /etc/openvpn/keys/ca.crt 2>/dev/null)
-CLIENT_CERT=$(openssl x509 -in /etc/openvpn/keys/client.crt 2>/dev/null)
-
-printf 'client\n'
-printf 'dev tun\n'
-printf 'proto udp\n'
-printf 'remote %s 1194\n' "$REMOTE"
-printf 'resolv-retry infinite\n'
-printf 'nobind\n'
-printf 'persist-key\n'
-printf 'persist-tun\n'
-printf 'remote-cert-tls server\n'
-printf 'tls-version-min 1.2\n'
-printf 'cipher AES-256-GCM\n'
-printf 'ncp-ciphers AES-256-GCM:AES-128-GCM\n'
-printf 'auth SHA256\n'
-printf 'key-direction 1\n'
-printf 'verb 3\n'
-printf 'mute 20\n'
-printf 'keepalive 10 60\n'
-printf '\n'
-printf '<ca>\n'; printf '%s\n' "$CA_CERT"; printf '</ca>\n'
-printf '\n'
-printf '<cert>\n'; printf '%s\n' "$CLIENT_CERT"; printf '</cert>\n'
-printf '\n'
-printf '<key>\n'; cat /etc/openvpn/keys/client.key; printf '</key>\n'
-printf '\n'
-printf '<tls-crypt>\n'; cat /etc/openvpn/keys/ta.key; printf '</tls-crypt>\n'
-EOF
-chmod +x package/base-files/files/bin/gen-ovpn-client
-
-# 2. LuCI Web 界面入口
-mkdir -p package/base-files/files/usr/lib/lua/luci/controller
-cat > package/base-files/files/usr/lib/lua/luci/controller/openvpn_dl.lua << 'EOF'
-module("luci.controller.openvpn_dl", package.seeall)
-
-function index()
-    -- 挂载在 Web 后台“服务(Services)”菜单下
-    entry({"admin", "services", "openvpn_dl"}, call("action_download"), "OpenVPN 客户端配置下载", 99).dependent = true
-end
-
-function action_download()
-    local fp = io.popen("/bin/gen-ovpn-client 2>/dev/null")
-    if not fp then
-        luci.http.status(500, "Internal Server Error")
-        return
-    end
-    local content = fp:read("*a")
-    fp:close()
-    
-    if content == nil or content == "" then
-        luci.http.prepare_content("text/plain; charset=utf-8")
-        luci.http.write("证书尚未生成或发生错误，请等待系统首次开机初始化几分钟后再试。")
-        return
-    end
-
-    luci.http.prepare_content("application/x-openvpn-profile")
-    luci.http.header("Content-Disposition", "attachment; filename=\"client.ovpn\"")
-    luci.http.write(content)
-end
-EOF
 
 # --- WireGuard 客户端配置下载功能 ---
 # 用户在 LuCI 页面输入 DDNS 域名，即可获得完整的客户端 .conf 文件和二维码
@@ -702,15 +493,16 @@ echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
 echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-echo "CONFIG_PACKAGE_openvpn-openssl=y" >> .config
-echo "CONFIG_PACKAGE_luci-app-openvpn=y" >> .config
+echo "CONFIG_PACKAGE_softethervpn5-server=y" >> .config
+echo "CONFIG_PACKAGE_softethervpn5-bridge=y" >> .config
+echo "CONFIG_PACKAGE_softethervpn5-client=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-softethervpn=y" >> .config
 
 # 9. 修复“保留配置”升级时 OpenVPN 证书丢失的问题
 # 将 OpenVPN 的配置和证书目录加入系统升级的白名单中（保留配置升级时不会被清除）
 KEEP_D_DIR="package/base-files/files/lib/upgrade/keep.d"
 mkdir -p "$KEEP_D_DIR"
-echo "/etc/openvpn/" > "$KEEP_D_DIR/vpn-custom"
-echo "/etc/wireguard/" >> "$KEEP_D_DIR/vpn-custom"
+echo "/etc/wireguard/" > "$KEEP_D_DIR/vpn-custom"
 
 
 # 10. 注入固件版本号，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
