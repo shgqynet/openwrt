@@ -67,6 +67,12 @@ jobs:
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
+    - name: Upgrade CMake
+      run: |
+        sudo apt-get -qq install python3-pip
+        sudo pip3 install --upgrade cmake
+        cmake --version
+
     - name: Clone source code
       working-directory: /workdir
       run: |
