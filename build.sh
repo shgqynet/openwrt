@@ -56,6 +56,10 @@ libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgcon
 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo \
 uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev python3-pip
 
+# 升级 CMake 至最新版以防止第三方组件编译失败 (如 rpcd-mod-luci 依赖 3.31)
+echo "正在使用 pip 升级 CMake..."
+sudo pip3 install --upgrade cmake || echo "pip 升级 CMake 失败，如果是在 Ubuntu 24.04 且遇到 externally-managed 错误，请尝试添加 --break-system-packages"
+
 echo "✅ 系统组件包准备完毕！"
 
 # ----------- 开始正式的编译流程 -----------
