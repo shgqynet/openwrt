@@ -1,40 +1,35 @@
 #!/bin/bash
-# 00-fix-cmake.sh - 动态探测并自动降级过高的 CMake 版本依赖要求
+# 00-fix-cmake.sh - 拦截并强制升级 OpenWrt 内部 Host 工具链使用的 CMake 版本
 
-# 获取系统当前实际执行的 CMake 版本 (例如 3.30.5 截取为主次版本号 3.30)
-if ! command -v cmake &> /dev/null; then
-    echo "Warning: cmake command not found in PATH. Skipping CMake version dynamic fix."
-    exit 0
-fi
+echo "========================================================="
+echo " [CMake Fix] Checking internal OpenWrt Host CMake version"
+echo "========================================================="
 
-CURRENT_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
-if [ -z "$CURRENT_CMAKE_VERSION" ]; then
-    echo "Warning: Could not parse cmake version. Skipping CMake fix."
-    exit 0
-fi
+CMAKE_MAKEFILE="tools/cmake/Makefile"
 
-# 提取主次版本号 (例如 3.30.5 -> 3.30)
-CURRENT_MAJOR_MINOR=$(echo "$CURRENT_CMAKE_VERSION" | cut -d. -f1,2)
-
-echo "[CMake Fix] Current system CMake version is $CURRENT_CMAKE_VERSION."
-echo "[CMake Fix] Setting compatibility cap to $CURRENT_MAJOR_MINOR"
-
-# 查找所有 feeds 目录下的 CMakeLists.txt 并按需降级
-find feeds -name "CMakeLists.txt" -type f 2>/dev/null | while read -r file; do
-    # 查找如 cmake_minimum_required(VERSION 3.31) 中的版本号
-    REQ_VER=$(grep -i 'cmake_minimum_required.*VERSION' "$file" | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+if [ -f "$CMAKE_MAKEFILE" ]; then
+    # 提取 OpenWrt 工具链中的 CMake 版本
+    PKG_VER=$(grep "^PKG_VERSION:=" "$CMAKE_MAKEFILE" | cut -d'=' -f2)
     
-    if [ -n "$REQ_VER" ]; then
-        # 比较两个版本号。如果 REQ_VER > CURRENT_MAJOR_MINOR，说明代码库要求超过了系统能力
-        # 使用 sort -V 来自然排序版本号
-        HIGHEST=$(printf '%s\n' "$REQ_VER" "$CURRENT_MAJOR_MINOR" | sort -V | tail -n1)
+    echo "Current OpenWrt internal host-cmake version: $PKG_VER"
+    
+    # 简单的版本判断，如果是 3.30 或以下的 3.x 版本，则强制升级至 3.31.2
+    if [[ "$PKG_VER" == 3.30.* ]] || [[ "$PKG_VER" == 3.2* ]]; then
+        echo "--> Upgrading OpenWrt host-cmake version to 3.31.2 to satisfy rpcd-mod-luci requirements."
         
-        if [ "$HIGHEST" = "$REQ_VER" ] && [ "$REQ_VER" != "$CURRENT_MAJOR_MINOR" ]; then
-            echo "[CMake Fix] -> Patching $file: Lowering required version from $REQ_VER to $CURRENT_MAJOR_MINOR"
-            # 动态替换版本号
-            sed -i "s/VERSION[[:space:]]*$REQ_VER/VERSION $CURRENT_MAJOR_MINOR/gi" "$file"
-        fi
+        # 替换版本号
+        sed -i 's/^PKG_VERSION:=.*/PKG_VERSION:=3.31.2/g' "$CMAKE_MAKEFILE"
+        
+        # 必须跳过 Hash 校验，否则下载官方源码包时会因为 hash 不匹配而中断
+        sed -i 's/^PKG_HASH:=.*/PKG_HASH:=skip/g' "$CMAKE_MAKEFILE"
+        
+        echo "--> Update successful."
+    else
+        echo "--> Host CMake version $PKG_VER satisfies requirements or is unknown, skipping override."
     fi
-done
+else
+    echo "--> Warning: $CMAKE_MAKEFILE not found!"
+    echo "--> Skipping internal CMake version bump."
+fi
 
-echo "[CMake Fix] Dynamic CMake adaptation completed."
+echo "========================================================="
