@@ -1,10 +1,6 @@
 #!/bin/bash
 # 01-packages.sh - 处理本地依赖与第三方包配置
 
-# 自动探测仓库根目录（适配云端 GITHUB_WORKSPACE 和本地编译环境）
-REPO_SRC="$GITHUB_WORKSPACE"
-[ -z "$REPO_SRC" ] && REPO_SRC="$(cd "$(dirname "$BASH_SOURCE[0]")/.." && pwd)"
-
 # 集成本地源码插件
 echo "[Packages] Using repository root: $REPO_SRC"
 echo "[Packages] Preparing custom local packages..."
