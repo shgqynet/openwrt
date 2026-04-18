@@ -1,13 +1,19 @@
 #!/bin/bash
 # 01-packages.sh - 处理本地依赖与第三方包配置
 
-# 集成本地源码插件（源码已放入仓库 packages/ 目录，无需依赖第三方且防止访问失败）
-# 直接从本工作区复制到 OpenWrt 的 package 编译目录
-cp -r "$GITHUB_WORKSPACE/packages/luci-app-autoupdate" package/luci-app-autoupdate
-cp -r "$GITHUB_WORKSPACE/packages/luci-app-aliddns" package/luci-app-aliddns
-cp -r "$GITHUB_WORKSPACE/packages/luci-app-argon-config" package/luci-app-argon-config
+# 集成本地源码插件
+echo "[Packages] Preparing custom local packages..."
+for pkg in luci-app-autoupdate luci-app-aliddns luci-app-argon-config; do
+    if [ -d "$GITHUB_WORKSPACE/packages/$pkg" ]; then
+        cp -r "$GITHUB_WORKSPACE/packages/$pkg" "package/$pkg"
+        echo "  -> Copied local package: $pkg"
+    else
+        echo "  -> Warning: Local package directory not found: packages/$pkg"
+    fi
+done
 
 # 预置 OpenClash 内核（避免首次安装系统后因无代理导致无法下载内核的死锁问题）
+echo "[Packages] Pre-downloading OpenClash core..."
 CORE_DIR="package/base-files/files/etc/openclash/core"
 mkdir -p "$CORE_DIR"
 
@@ -16,6 +22,9 @@ if curl -sL --connect-timeout 60 \
     | tar xzvC "$CORE_DIR" -f -; then
     mv "$CORE_DIR/clash" "$CORE_DIR/clash_meta" 2>/dev/null || true
     chmod +x "$CORE_DIR/clash_meta"
+    echo "  -> OpenClash core downloaded and extracted successfully."
+else
+    echo "  -> Warning: Failed to download OpenClash core. It will be downloaded on first run."
 fi
 
 # 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
