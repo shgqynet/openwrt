@@ -52,6 +52,10 @@ else
     echo "本地源码版本与远端一致，跳过缓存冲突分析。"
 fi
 
+echo -e "\n[2.4/5] 升级 CMake 确保第三方插件编译兼容 (如 rpcd-mod-luci 依赖 3.31)..."
+echo "正在使用 pip 升级 CMake..."
+sudo pip3 install --upgrade cmake || echo "pip 升级 CMake 失败，如果是在 Ubuntu 24.04 且遇到 externally-managed 错误，请尝试添加 --break-system-packages"
+
 echo -e "\n[2.5/5] 执行环境准备 ( diy-part1.sh ) ..."
 if [ -f "$BASE_DIR/diy-part1.sh" ]; then
     echo "✅ 挂载 diy-part1.sh 添加第三方插件源..."
