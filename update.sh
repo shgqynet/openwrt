@@ -52,14 +52,7 @@ else
     echo "本地源码版本与远端一致，跳过缓存冲突分析。"
 fi
 
-echo -e "\n[2.4/5] 升级 CMake 确保第三方插件编译兼容 (如 rpcd-mod-luci 依赖 3.31)..."
-echo "正在使用 Kitware 官方源升级 CMake..."
-sudo apt-get update -qq
-sudo apt-get install -y wget gpg apt-transport-https lsb-release
-wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
-sudo apt-get update -qq
-sudo apt-get install -y cmake
+
 echo -e "\n[2.5/5] 执行环境准备 ( diy-part1.sh ) ..."
 if [ -f "$BASE_DIR/diy-part1.sh" ]; then
     echo "✅ 挂载 diy-part1.sh 添加第三方插件源..."

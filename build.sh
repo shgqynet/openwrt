@@ -56,14 +56,6 @@ libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgcon
 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo \
 uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev python3-pip
 
-# 升级 CMake 至最新版以防止第三方组件编译失败 (如 rpcd-mod-luci 依赖 3.31)
-echo "正在使用 Kitware 官方源升级 CMake..."
-sudo apt-get update -qq
-sudo apt-get install -y wget gpg apt-transport-https lsb-release
-wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
-sudo apt-get update -qq
-sudo apt-get install -y cmake
 echo "✅ 系统组件包准备完毕！"
 
 # ----------- 开始正式的编译流程 -----------
