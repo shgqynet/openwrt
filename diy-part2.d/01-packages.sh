@@ -1,14 +1,19 @@
 #!/bin/bash
 # 01-packages.sh - 处理本地依赖与第三方包配置
 
+# 自动探测仓库根目录（适配云端 GITHUB_WORKSPACE 和本地编译环境）
+REPO_SRC="$GITHUB_WORKSPACE"
+[ -z "$REPO_SRC" ] && REPO_SRC="$(cd "$(dirname "$BASH_SOURCE[0]")/.." && pwd)"
+
 # 集成本地源码插件
+echo "[Packages] Using repository root: $REPO_SRC"
 echo "[Packages] Preparing custom local packages..."
 for pkg in luci-app-autoupdate luci-app-aliddns luci-app-argon-config; do
-    if [ -d "$GITHUB_WORKSPACE/packages/$pkg" ]; then
-        cp -r "$GITHUB_WORKSPACE/packages/$pkg" "package/$pkg"
+    if [ -d "$REPO_SRC/packages/$pkg" ]; then
+        cp -r "$REPO_SRC/packages/$pkg" "package/$pkg"
         echo "  -> Copied local package: $pkg"
     else
-        echo "  -> Warning: Local package directory not found: packages/$pkg"
+        echo "  -> Warning: Local package directory not found: $REPO_SRC/packages/$pkg"
     fi
 done
 
