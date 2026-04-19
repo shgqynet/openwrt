@@ -45,3 +45,10 @@ echo "CONFIG_PACKAGE_softethervpn5-server=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-bridge=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-client=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-softethervpn=y" >> .config
+
+# --- USB 打印机共享支持 (p910nd) ---
+# p910nd 是目前 OpenWrt 上兼容性最好、最轻量的打印服务器方案，维护状态稳定。
+echo "CONFIG_PACKAGE_kmod-usb-printer=y" >> .config
+echo "CONFIG_PACKAGE_p910nd=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-usb-printer=y" >> .config
+echo "CONFIG_PACKAGE_luci-i18n-usb-printer-zh-cn=y" >> .config
