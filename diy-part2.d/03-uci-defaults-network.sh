@@ -81,5 +81,24 @@ fi
 uci set network.globals='globals' 2>/dev/null || true
 uci set network.globals.auto_inited='1'
 uci commit network
+
+# --- 动态修复 x86 软路由固件的 board.json 解决首页网口状态显示不全的 BUG ---
+# LuCI Dashboard 强烈依赖配置里的端口映射。动态生成 board.json 让前台准确画出所有物理网口
+PORTS_JSON=$(echo $lan_ports | awk '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i==NF?"":", ")}')
+
+cat > /etc/board.json << BEOF
+{
+  "network": {
+    "lan": {
+      "ports": [ \$PORTS_JSON ]
+    }\$(if [ -n "\$wan_port" ]; then echo ",
+    \"wan\": {
+      \"device\": \"\$wan_port\"
+    }"; fi)
+  }
+}
+BEOF
+
 EOF
 chmod +x "$uci_dir/97-auto-network"
+
