@@ -5,27 +5,38 @@ uci_dir="package/base-files/files/etc/uci-defaults"
 mkdir -p "$uci_dir"
 
 # --- 自动配置多网口网络（LAN/WAN自动分配） ---
-# 单网口：eth0 -> LAN
-# 双网口：eth0 -> LAN, eth1 -> WAN
-# 多网口：eth0 -> LAN, eth1 -> WAN, eth2及以后 -> 桥接至 LAN
+# 兼容：物理机(eth*)、ESXi虚拟机(ens*/enp*)、任意口数
+# 口1(sort最小) -> LAN, 口2 -> WAN, 口3+ -> 桥接至LAN
+# 单网口设备：唯一口 -> LAN（自动删除WAN）
 cat > "$uci_dir/97-auto-network" << 'EOF'
 #!/bin/sh
 if [ "$(uci -q get network.globals.auto_inited)" = "1" ]; then
     exit 0
 fi
 
-interfaces=$(ls -d /sys/class/net/eth* 2>/dev/null | awk -F '/' '{print $5}' | sort)
+# 检测物理网口：通过 /device 路径排除 lo/br-*/veth*/tun 等所有虚拟接口
+# 兼容 eth*(物理机) 和 ens*/enp*(ESXi/新内核可预测命名)
+interfaces=""
+for dev in $(ls /sys/class/net/ | sort); do
+    [ -e "/sys/class/net/$dev/device" ] || continue
+    interfaces="$interfaces $dev"
+done
+interfaces=$(echo "$interfaces" | sed 's/^ *//;s/ *$//')
+
+# 未检测到任何物理接口时，跳过配置不写 auto_inited，等下次开机重试
+[ -z "$interfaces" ] && exit 0
+
 lan_ports=""
 wan_port=""
+count=0
 
 for iface in $interfaces; do
-    if [ "$iface" = "eth0" ]; then
-        lan_ports="$lan_ports $iface"
-    elif [ "$iface" = "eth1" ]; then
-        wan_port="$iface"
-    else
-        lan_ports="$lan_ports $iface"
-    fi
+    case $count in
+        0) lan_ports="$iface" ;;
+        1) wan_port="$iface" ;;
+        *) lan_ports="$lan_ports $iface" ;;
+    esac
+    count=$((count+1))
 done
 
 lan_ports=$(echo $lan_ports | sed 's/^ *//;s/ *$//')
@@ -98,22 +109,28 @@ cat > "$board_d_dir/99-custom-ports" << 'BOARDEOF'
 
 board_config_update
 
-# 动态检测所有物理 eth 接口
-interfaces=$(ls -d /sys/class/net/eth* 2>/dev/null | awk -F '/' '{print $5}' | sort)
+# 检测物理网口（与 97-auto-network 保持一致）
+interfaces=""
+for dev in $(ls /sys/class/net/ | sort); do
+    [ -e "/sys/class/net/$dev/device" ] || continue
+    interfaces="$interfaces $dev"
+done
+interfaces=$(echo "$interfaces" | sed 's/^ *//;s/ *$//')
+
 lan_ports=""
 wan_port=""
+count=0
 
 for iface in $interfaces; do
-    if [ "$iface" = "eth0" ]; then
-        lan_ports="$lan_ports $iface"
-    elif [ "$iface" = "eth1" ]; then
-        wan_port="$iface"
-    else
-        lan_ports="$lan_ports $iface"
-    fi
+    case $count in
+        0) lan_ports="$iface" ;;
+        1) wan_port="$iface" ;;
+        *) lan_ports="$lan_ports $iface" ;;
+    esac
+    count=$((count+1))
 done
 
-lan_ports=$(echo $lan_ports | sed 's/^ *//')
+lan_ports=$(echo $lan_ports | sed 's/^ *//;s/ *$//')
 
 # 使用官方 API 写入 board.json（merge 而非覆盖）
 if [ -n "$wan_port" ]; then
