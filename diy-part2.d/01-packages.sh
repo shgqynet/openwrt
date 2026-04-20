@@ -39,8 +39,6 @@ echo "CONFIG_PACKAGE_luci-proto-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
 echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-echo "CONFIG_PACKAGE_zerotier=y" >> .config
-echo "CONFIG_PACKAGE_luci-app-zerotier=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-server=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-bridge=y" >> .config
 echo "CONFIG_PACKAGE_softethervpn5-client=y" >> .config
@@ -52,3 +50,11 @@ echo "CONFIG_PACKAGE_kmod-usb-printer=y" >> .config
 echo "CONFIG_PACKAGE_p910nd=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-usb-printer=y" >> .config
 echo "CONFIG_PACKAGE_luci-i18n-usb-printer-zh-cn=y" >> .config
+
+# --- 屏蔽不想编译的默认插件 ---
+# 屏蔽 网络共享 (Samba)
+echo "# CONFIG_PACKAGE_luci-app-samba is not set" >> .config
+echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+echo "# CONFIG_PACKAGE_autosamba is not set" >> .config
+echo "# CONFIG_PACKAGE_samba36-server is not set" >> .config
+echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config

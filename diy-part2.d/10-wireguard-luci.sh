@@ -9,8 +9,9 @@
 mkdir -p package/base-files/files/bin
 cat > package/base-files/files/bin/gen-wg-client << 'EOF'
 #!/bin/sh
-# 用法: gen-wg-client <phone|pc> <domain>
-DEVICE="${1:-phone}"
+# 用法: gen-wg-client <phone1-6|pc1-6> <domain>
+# IP 分配: phone1-6 → 10.0.0.2-7，pc1-6 → 10.0.0.8-13，全部走全流量代理
+DEVICE="${1:-phone1}"
 DOMAIN="${2:-your-domain.example.com}"
 
 INFO_FILE="/etc/wireguard/${DEVICE}.info"
@@ -25,20 +26,30 @@ if [ ! -f "/etc/wireguard/server_public.key" ]; then
     exit 1
 fi
 
+# IP 映射表（与首次开机初始化脚本保持一致）
+case "$DEVICE" in
+    phone1) CLIENT_IP="10.0.0.2/32" ;;
+    phone2) CLIENT_IP="10.0.0.3/32" ;;
+    phone3) CLIENT_IP="10.0.0.4/32" ;;
+    phone4) CLIENT_IP="10.0.0.5/32" ;;
+    phone5) CLIENT_IP="10.0.0.6/32" ;;
+    phone6) CLIENT_IP="10.0.0.7/32" ;;
+    pc1)    CLIENT_IP="10.0.0.8/32" ;;
+    pc2)    CLIENT_IP="10.0.0.9/32" ;;
+    pc3)    CLIENT_IP="10.0.0.10/32" ;;
+    pc4)    CLIENT_IP="10.0.0.11/32" ;;
+    pc5)    CLIENT_IP="10.0.0.12/32" ;;
+    pc6)    CLIENT_IP="10.0.0.13/32" ;;
+    *)      echo "Error: unknown device '$DEVICE'" >&2; exit 1 ;;
+esac
+
 . "$INFO_FILE"
 SERVER_PUB="$(cat /etc/wireguard/server_public.key)"
 PORT="$(uci -q get network.wg0.listen_port 2>/dev/null || echo 51820)"
 DNS="$(uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.3.1)"
 
-if [ "$DEVICE" = "phone" ]; then
-    CLIENT_IP="10.0.0.2/32"
-    ALLOWED_IPS="0.0.0.0/0"
-else
-    CLIENT_IP="10.0.0.3/32"
-    # 电脑节点：提取网关所在 C 段自适应下发路由表
-    ROUTER_SUBNET="$(echo $DNS | cut -d'.' -f1,2,3).0/24"
-    ALLOWED_IPS="${ROUTER_SUBNET}, 10.0.0.0/24"
-fi
+# 所有设备统一走全流量代理（手机与 PC 行为一致）
+ALLOWED_IPS="0.0.0.0/0, ::/0"
 
 printf '[Interface]\n'
 printf 'PrivateKey = %s\n' "$PRIV_KEY"
@@ -92,7 +103,7 @@ function action_index()
     -- 页面上最终使用的域名（优先使用表单的值，如果没提交就是空的时候，使用保存的值）
     domain = (domain and domain ~= "") and domain or saved_domain
 
-    local device = http.formvalue("device") or "phone"
+    local device = http.formvalue("device") or "phone1"
     local action = http.formvalue("action") or ""
 
     -- 下载 .conf 文件
@@ -168,8 +179,22 @@ cat > package/base-files/files/usr/lib/lua/luci/view/wg_client_dl.htm << 'HTEOF'
     <div style="margin-bottom:14px">
       <label>设备类型</label>
       <select name="device">
-        <option value="phone" <%=(device=="phone" and "selected" or "")%>>📱 手机（MyPhone - 10.0.0.2）</option>
-        <option value="pc"    <%=(device=="pc"    and "selected" or "")%>>💻 电脑（MyPC - 10.0.0.3）</option>
+        <optgroup label="📱 手机（全流量代理）">
+          <option value="phone1" <%=(device=="phone1" and "selected" or "")%>>Phone 1 · 10.0.0.2</option>
+          <option value="phone2" <%=(device=="phone2" and "selected" or "")%>>Phone 2 · 10.0.0.3</option>
+          <option value="phone3" <%=(device=="phone3" and "selected" or "")%>>Phone 3 · 10.0.0.4</option>
+          <option value="phone4" <%=(device=="phone4" and "selected" or "")%>>Phone 4 · 10.0.0.5</option>
+          <option value="phone5" <%=(device=="phone5" and "selected" or "")%>>Phone 5 · 10.0.0.6</option>
+          <option value="phone6" <%=(device=="phone6" and "selected" or "")%>>Phone 6 · 10.0.0.7</option>
+        </optgroup>
+        <optgroup label="💻 电脑（全流量代理）">
+          <option value="pc1" <%=(device=="pc1" and "selected" or "")%>>PC 1 · 10.0.0.8</option>
+          <option value="pc2" <%=(device=="pc2" and "selected" or "")%>>PC 2 · 10.0.0.9</option>
+          <option value="pc3" <%=(device=="pc3" and "selected" or "")%>>PC 3 · 10.0.0.10</option>
+          <option value="pc4" <%=(device=="pc4" and "selected" or "")%>>PC 4 · 10.0.0.11</option>
+          <option value="pc5" <%=(device=="pc5" and "selected" or "")%>>PC 5 · 10.0.0.12</option>
+          <option value="pc6" <%=(device=="pc6" and "selected" or "")%>>PC 6 · 10.0.0.13</option>
+        </optgroup>
       </select>
     </div>
     <div style="margin-bottom:14px">
@@ -181,7 +206,7 @@ cat > package/base-files/files/usr/lib/lua/luci/view/wg_client_dl.htm << 'HTEOF'
       <button class="wg-btn wg-btn-dl"      type="submit" name="action" value="download">⬇ 下载 .conf 文件</button>
     </div>
   </form>
-  <p class="wg-tip">所有密钥均在首次开机时自动生成。您只需填写您的域名即可获得完整客户端配置。</p>
+  <p class="wg-tip">共 12 个节点（Phone 1-6 · PC 1-6），密钥在首次开机时自动生成，手机与 PC 均走全流量代理（AllowedIPs = 0.0.0.0/0）。</p>
 </div>
 <% if conf_text and conf_text ~= "" then %>
 <div class="wg-card">
@@ -189,7 +214,7 @@ cat > package/base-files/files/usr/lib/lua/luci/view/wg_client_dl.htm << 'HTEOF'
   <div class="wg-pre"><%=conf_text%></div>
   <% if qr_svg and qr_svg ~= "" then %>
   <div class="wg-qr">
-    <p style="color:#94a3b8;margin-bottom:8px">手机端扫码导入</p>
+    <p style="color:#94a3b8;margin-bottom:8px">扫码导入配置</p>
     <%=qr_svg%>
   </div>
   <% end %>

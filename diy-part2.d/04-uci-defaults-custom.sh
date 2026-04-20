@@ -40,17 +40,9 @@ uci commit network
 # --- 自动配置 WireGuard 基础环境接口与防火墙 ---
 # 判断 wg0 接口是否存在，防止系统升级保留配置时覆盖原有密钥等数据
 if ! uci -q get network.wg0 > /dev/null; then
-	# 1. 生成服务端、客户端密钥，以及预共享密钥(PSK)增加抗量子攻击安全性
+	# 1. 生成服务端密钥
 	WG_SERVER_PRIV="$(wg genkey)"
 	WG_SERVER_PUB="$(echo "$WG_SERVER_PRIV" | wg pubkey)"
-
-	WG_PHONE_PRIV="$(wg genkey)"
-	WG_PHONE_PUB="$(echo "$WG_PHONE_PRIV" | wg pubkey)"
-	WG_PHONE_PSK="$(wg genpsk)"
-
-	WG_PC_PRIV="$(wg genkey)"
-	WG_PC_PUB="$(echo "$WG_PC_PRIV" | wg pubkey)"
-	WG_PC_PSK="$(wg genpsk)"
 
 	# 2. 建立 wg0 接口，注入服务端私钥
 	uci set network.wg0="interface"
@@ -60,39 +52,41 @@ if ! uci -q get network.wg0 > /dev/null; then
 	uci set network.wg0.mtu="1420"
 	uci add_list network.wg0.addresses="10.0.0.1/24"
 
-	# 3. 手机节点 MyPhone（10.0.0.2），全流量走隧道
-	uci set network.wg_client_phone="wireguard_wg0"
-	uci set network.wg_client_phone.description="MyPhone"
-	uci set network.wg_client_phone.public_key="$WG_PHONE_PUB"
-	uci set network.wg_client_phone.preshared_key="$WG_PHONE_PSK"
-	uci set network.wg_client_phone.route_allowed_ips="1"
-	uci add_list network.wg_client_phone.allowed_ips="10.0.0.2/32"
+	mkdir -p /etc/wireguard
 
-	# 4. 电脑节点 MyPC（10.0.0.3），仅隧道内网段流量
-	uci set network.wg_client_pc="wireguard_wg0"
-	uci set network.wg_client_pc.description="MyPC"
-	uci set network.wg_client_pc.public_key="$WG_PC_PUB"
-	uci set network.wg_client_pc.preshared_key="$WG_PC_PSK"
-	uci set network.wg_client_pc.route_allowed_ips="1"
-	uci add_list network.wg_client_pc.allowed_ips="10.0.0.3/32"
+	# 3. 循环生成 6 部手机 + 6 台 PC 的密钥与 Peer（共 12 个节点）
+	#    phone1-6 → 10.0.0.2-7，pc1-6 → 10.0.0.8-13，全部走全流量代理
+	for _i in 1 2 3 4 5 6; do
+		# phone$_i
+		_PRIV="$(wg genkey)"
+		_PUB="$(echo "$_PRIV" | wg pubkey)"
+		_PSK="$(wg genpsk)"
+		uci set network.wg_phone${_i}="wireguard_wg0"
+		uci set network.wg_phone${_i}.description="Phone${_i}"
+		uci set network.wg_phone${_i}.public_key="$_PUB"
+		uci set network.wg_phone${_i}.preshared_key="$_PSK"
+		uci set network.wg_phone${_i}.route_allowed_ips="1"
+		uci add_list network.wg_phone${_i}.allowed_ips="10.0.0.$((1+_i))/32"
+		printf 'PRIV_KEY="%s"\nPSK="%s"\n' "$_PRIV" "$_PSK" > /etc/wireguard/phone${_i}.info
+
+		# pc$_i
+		_PRIV="$(wg genkey)"
+		_PUB="$(echo "$_PRIV" | wg pubkey)"
+		_PSK="$(wg genpsk)"
+		uci set network.wg_pc${_i}="wireguard_wg0"
+		uci set network.wg_pc${_i}.description="PC${_i}"
+		uci set network.wg_pc${_i}.public_key="$_PUB"
+		uci set network.wg_pc${_i}.preshared_key="$_PSK"
+		uci set network.wg_pc${_i}.route_allowed_ips="1"
+		uci add_list network.wg_pc${_i}.allowed_ips="10.0.0.$((7+_i))/32"
+		printf 'PRIV_KEY="%s"\nPSK="%s"\n' "$_PRIV" "$_PSK" > /etc/wireguard/pc${_i}.info
+	done
+
 	uci commit network
 
-	# 保存所有密钥供 LuCI 页面生成客户端配置使用
-	mkdir -p /etc/wireguard
-	cat > /etc/wireguard/phone.info <<WGEOF
-PRIV_KEY="$WG_PHONE_PRIV"
-PSK="$WG_PHONE_PSK"
-WGEOF
-
-	cat > /etc/wireguard/pc.info <<WGEOF
-PRIV_KEY="$WG_PC_PRIV"
-PSK="$WG_PC_PSK"
-WGEOF
-
+	chmod 600 /etc/wireguard/*.info
 	# 服务端公钥：客户端配置中的 [Peer] PublicKey 字段需要用到它
 	echo "$WG_SERVER_PUB" > /etc/wireguard/server_public.key
-
-	chmod 600 /etc/wireguard/*.info
 	chmod 644 /etc/wireguard/server_public.key
 fi
 
@@ -153,48 +147,7 @@ if ! uci -q get firewall.softether > /dev/null; then
 	uci commit firewall
 fi
 
-# --- 配置 ZeroTier 基础环境与防火墙 ---
-if ! uci -q get zerotier.sample_config > /dev/null; then
-	uci set zerotier.mynet=network
-	uci set zerotier.mynet.enabled='0'
-	uci set zerotier.mynet.nat='1'
-	uci commit zerotier
-fi
-
-if ! uci -q get firewall.zerotier > /dev/null; then
-	uci set firewall.zerotier=zone
-	uci set firewall.zerotier.name='zerotier'
-	uci set firewall.zerotier.input='ACCEPT'
-	uci set firewall.zerotier.output='ACCEPT'
-	uci set firewall.zerotier.forward='ACCEPT'
-	uci set firewall.zerotier.masq='1'
-	uci set firewall.zerotier.mtu_fix='1'
-	uci add_list firewall.zerotier.network='zt0'
-
-	uci set firewall.zt_lan_fwd=forwarding
-	uci set firewall.zt_lan_fwd.src='zerotier'
-	uci set firewall.zt_lan_fwd.dest='lan'
-
-	uci set firewall.lan_zt_fwd=forwarding
-	uci set firewall.lan_zt_fwd.src='lan'
-	uci set firewall.lan_zt_fwd.dest='zerotier'
-
-	# 放行 ZeroTier UDP 端口 (9993) 协助打洞
-	uci set firewall.zt_rule=rule
-	uci set firewall.zt_rule.name='Allow-ZeroTier-External'
-	uci set firewall.zt_rule.src='wan'
-	uci set firewall.zt_rule.proto='udp'
-	uci set firewall.zt_rule.dest_port='9993'
-	uci set firewall.zt_rule.target='ACCEPT'
 	uci commit firewall
-fi
-
-# 在网络接口中预设 zt0
-if ! uci -q get network.zt0 > /dev/null; then
-	uci set network.zt0=interface
-	uci set network.zt0.proto='none'
-	uci set network.zt0.device='zt+'
-	uci commit network
 fi
 
 uci set system.@system[0].custom_inited='1'
