@@ -147,8 +147,6 @@ if ! uci -q get firewall.softether > /dev/null; then
 	uci commit firewall
 fi
 
-	uci commit firewall
-fi
 
 uci set system.@system[0].custom_inited='1'
 uci commit system
