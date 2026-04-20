@@ -31,6 +31,9 @@ fi
 # 强制写入 qrencode 软件包，用于 WireGuard 的配置二维码显示
 echo "CONFIG_PACKAGE_qrencode=y" >> .config
 
+# 注入前瞻兼容层包 (luci-compat)，确保在未来的 OpenWrt 版本中自建的 Lua LuCI 界面不会因环境被抛弃而崩坏
+echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+
 # 强制写入核心加密组件与第三方依赖包
 echo "CONFIG_PACKAGE_openssl-util=y" >> .config
 echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
