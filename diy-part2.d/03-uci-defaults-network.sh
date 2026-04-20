@@ -82,23 +82,47 @@ uci set network.globals='globals' 2>/dev/null || true
 uci set network.globals.auto_inited='1'
 uci commit network
 
-# --- 动态修复 x86 软路由固件的 board.json 解决首页网口状态显示不全的 BUG ---
-# LuCI Dashboard 强烈依赖配置里的端口映射。动态生成 board.json 让前台准确画出所有物理网口
-PORTS_JSON=$(echo $lan_ports | awk '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i==NF?"":", ")}')
-
-cat > /etc/board.json << BEOF
-{
-  "network": {
-    "lan": {
-      "ports": [ \$PORTS_JSON ]
-    }\$(if [ -n "\$wan_port" ]; then echo ",
-    \"wan\": {
-      \"device\": \"\$wan_port\"
-    }"; fi)
-  }
-}
-BEOF
-
 EOF
 chmod +x "$uci_dir/97-auto-network"
+
+# --- 修复 x86 软路由 LuCI 首页网口状态显示不全 ---
+# 通过 board.d 机制让 board_detect 正确生成 board.json
+# board.d 脚本在 config_generate 之前运行，使用 ucidef_* API 安全合并写入
+board_d_dir="package/base-files/files/etc/board.d"
+mkdir -p "$board_d_dir"
+
+cat > "$board_d_dir/99-custom-ports" << 'BOARDEOF'
+#!/bin/sh
+
+. /lib/functions/uci-defaults.sh
+
+board_config_update
+
+# 动态检测所有物理 eth 接口
+interfaces=$(ls -d /sys/class/net/eth* 2>/dev/null | awk -F '/' '{print $5}' | sort)
+lan_ports=""
+wan_port=""
+
+for iface in $interfaces; do
+    if [ "$iface" = "eth0" ]; then
+        lan_ports="$lan_ports $iface"
+    elif [ "$iface" = "eth1" ]; then
+        wan_port="$iface"
+    else
+        lan_ports="$lan_ports $iface"
+    fi
+done
+
+lan_ports=$(echo $lan_ports | sed 's/^ *//')
+
+# 使用官方 API 写入 board.json（merge 而非覆盖）
+if [ -n "$wan_port" ]; then
+    ucidef_set_interfaces_lan_wan "$lan_ports" "$wan_port"
+else
+    ucidef_set_interface_lan "$lan_ports"
+fi
+
+board_config_flush
+BOARDEOF
+chmod +x "$board_d_dir/99-custom-ports"
 
