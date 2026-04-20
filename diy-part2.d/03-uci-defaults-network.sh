@@ -60,7 +60,7 @@ if [ -n "$lan_ports" ]; then
         uci delete network.lan.ifname 2>/dev/null
         uci set network.lan.device='br-lan'
     else
-        # 旧版语法
+        # Fallback 兼容分支：针对尚未采用 DSA 架构的旧环境（如早期的 swconfig 框架），保留通过 ifname 扁平化绑定网桥的语法作为保底。
         uci set network.lan.type='bridge'
         uci set network.lan.ifname="$lan_ports"
     fi
