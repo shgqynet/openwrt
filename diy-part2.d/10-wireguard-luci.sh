@@ -1,6 +1,109 @@
 #!/bin/bash
 # 10-wireguard-luci.sh - WireGuard 客户端与 LuCI 相关配置
 
+# ---------------------------------------------------------
+# 0. 首次开机初始化脚本 (/etc/uci-defaults/98-wireguard-init)
+#    服务端 wg0：单次初始化（幂等保护密钥）
+#    Peer 节点：每个节点独立检查，升级后只补全缺失节点（解决扩容不生效问题）
+#    防火墙规则：单次初始化（幂等）
+# ---------------------------------------------------------
+_wg_uci_dir="package/base-files/files/etc/uci-defaults"
+mkdir -p "$_wg_uci_dir"
+
+cat > "$_wg_uci_dir/98-wireguard-init" << 'WGINIT'
+#!/bin/sh
+
+# 1. 服务端（wg0）：全新安装时初始化，升级保留配置时跳过（保护服务端密钥不变）
+if ! uci -q get network.wg0 > /dev/null; then
+	WG_SERVER_PRIV="$(wg genkey)"
+	WG_SERVER_PUB="$(echo "$WG_SERVER_PRIV" | wg pubkey)"
+
+	uci set network.wg0="interface"
+	uci set network.wg0.proto="wireguard"
+	uci set network.wg0.private_key="$WG_SERVER_PRIV"
+	uci set network.wg0.listen_port="51820"
+	uci set network.wg0.mtu="1420"
+	uci add_list network.wg0.addresses="10.0.0.1/24"
+	uci commit network
+
+	mkdir -p /etc/wireguard
+	echo "$WG_SERVER_PUB" > /etc/wireguard/server_public.key
+	chmod 644 /etc/wireguard/server_public.key
+fi
+
+# 2. 客户端 Peer：幂等补全——每个节点单独检查，只生成缺失的
+#    phone1-6 → 10.0.0.2-7，pc1-6 → 10.0.0.8-13，全部走全流量代理
+#    固件升级后若新增节点，下次开机时会自动补全，已有节点密钥不变
+mkdir -p /etc/wireguard
+_wg_changed=0
+for _i in 1 2 3 4 5 6; do
+	if ! uci -q get network.wg_phone${_i} > /dev/null; then
+		_PRIV="$(wg genkey)"
+		_PUB="$(echo "$_PRIV" | wg pubkey)"
+		_PSK="$(wg genpsk)"
+		uci set network.wg_phone${_i}="wireguard_wg0"
+		uci set network.wg_phone${_i}.description="Phone${_i}"
+		uci set network.wg_phone${_i}.public_key="$_PUB"
+		uci set network.wg_phone${_i}.preshared_key="$_PSK"
+		uci set network.wg_phone${_i}.route_allowed_ips="1"
+		uci add_list network.wg_phone${_i}.allowed_ips="10.0.0.$((1+_i))/32"
+		printf 'PRIV_KEY="%s"\nPSK="%s"\n' "$_PRIV" "$_PSK" > /etc/wireguard/phone${_i}.info
+		_wg_changed=1
+	fi
+	if ! uci -q get network.wg_pc${_i} > /dev/null; then
+		_PRIV="$(wg genkey)"
+		_PUB="$(echo "$_PRIV" | wg pubkey)"
+		_PSK="$(wg genpsk)"
+		uci set network.wg_pc${_i}="wireguard_wg0"
+		uci set network.wg_pc${_i}.description="PC${_i}"
+		uci set network.wg_pc${_i}.public_key="$_PUB"
+		uci set network.wg_pc${_i}.preshared_key="$_PSK"
+		uci set network.wg_pc${_i}.route_allowed_ips="1"
+		uci add_list network.wg_pc${_i}.allowed_ips="10.0.0.$((7+_i))/32"
+		printf 'PRIV_KEY="%s"\nPSK="%s"\n' "$_PRIV" "$_PSK" > /etc/wireguard/pc${_i}.info
+		_wg_changed=1
+	fi
+done
+[ "$_wg_changed" = "1" ] && uci commit network
+chmod 600 /etc/wireguard/*.info 2>/dev/null || true
+
+# 3. 防火墙：只在未配置时初始化（幂等）
+if ! uci -q get firewall.wg > /dev/null; then
+	uci set firewall.wg="zone"
+	uci set firewall.wg.name="wireguard"
+	uci set firewall.wg.input="ACCEPT"
+	uci set firewall.wg.output="ACCEPT"
+	uci set firewall.wg.forward="ACCEPT"
+	uci add_list firewall.wg.network="wg0"
+
+	# 放行 51820 UDP 端口（不限来源 zone，主路由从 wan 进、旁路由从 lan 进均可握手）
+	uci set firewall.wg_rule="rule"
+	uci set firewall.wg_rule.name="Allow-WireGuard"
+	uci set firewall.wg_rule.dest_port="51820"
+	uci set firewall.wg_rule.proto="udp"
+	uci set firewall.wg_rule.target="ACCEPT"
+
+	# 允许 wg 和 lan 互通
+	uci set firewall.wg_lan_forward="forwarding"
+	uci set firewall.wg_lan_forward.src="wireguard"
+	uci set firewall.wg_lan_forward.dest="lan"
+
+	uci set firewall.lan_wg_forward="forwarding"
+	uci set firewall.lan_wg_forward.src="lan"
+	uci set firewall.lan_wg_forward.dest="wireguard"
+
+	# 允许 wg 节点访问外网（wan zone 自带 masq='1'，转发到此即自动 SNAT，无需额外规则）
+	uci set firewall.wg_wan_forward="forwarding"
+	uci set firewall.wg_wan_forward.src="wireguard"
+	uci set firewall.wg_wan_forward.dest="wan"
+
+	uci commit firewall
+fi
+
+exit 0
+WGINIT
+chmod +x "$_wg_uci_dir/98-wireguard-init"
+
 # --- WireGuard 客户端配置下载功能 ---
 # 用户在 LuCI 页面输入 DDNS 域名，即可获得完整的客户端 .conf 文件和二维码
 # 服务端公钥、客户端预共享密钥均在首次启动时自动生成并保存
