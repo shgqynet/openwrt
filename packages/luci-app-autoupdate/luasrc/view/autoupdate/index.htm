@@ -41,10 +41,11 @@
 }
 .au-ver-box .label { font-size: 0.78em; color: var(--text-color-low, #888); margin-bottom: 4px; }
 .au-ver-box .value { font-size: 1.15em; font-weight: 700; font-family: monospace; }
-.au-ver-box.local  .value { color: #4a9; }
-.au-ver-box.cloud  .value { color: #48f; }
-.au-ver-box.status .value { color: #f80; }
-.au-ver-box.status.ok .value { color: #4a9; }
+.au-ver-box.local            .value { color: #4a9; }
+.au-ver-box.cloud            .value { color: #48f; }
+.au-ver-box.status           .value { color: #f80; }
+.au-ver-box.status.ok        .value { color: #4a9; }
+.au-ver-box.status.downgrade .value { color: #e44; }
 
 /* ─── 进度步骤条 ─── */
 .au-steps {
@@ -133,7 +134,8 @@
     color: var(--text-color-high, #333);
 }
 .au-form-row input[type="text"],
-.au-form-row input[type="url"] {
+.au-form-row input[type="url"],
+.au-form-row input[type="number"] {
     flex: 1;
     min-width: 180px;
     padding: 6px 10px;
@@ -149,6 +151,21 @@
     width: 100%;
     padding-left: 130px;
 }
+
+/* ─── 版本选择下拉框 ─── */
+.au-select {
+    flex: 1;
+    min-width: 180px;
+    padding: 7px 10px;
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 4px;
+    font-size: 0.86em;
+    font-family: monospace;
+    background: var(--background-color, #fff);
+    color: var(--text-color-high, #333);
+    cursor: pointer;
+}
+.au-select:focus { outline: 2px solid #48f; border-color: #48f; }
 
 /* ─── 按钮 ─── */
 .au-btn {
@@ -216,7 +233,7 @@ html[data-darkmode="true"], body.dark {
             <div class="value" id="ver-local">读取中…</div>
         </div>
         <div class="au-ver-box cloud">
-            <div class="label">GitHub 最新版本</div>
+            <div class="label">选定目标版本</div>
             <div class="value" id="ver-cloud">—</div>
         </div>
         <div class="au-ver-box status" id="box-status">
@@ -233,12 +250,24 @@ html[data-darkmode="true"], body.dark {
 
     <!-- 更新日志（有新版本时展示）-->
     <div style="margin-top:12px;">
-        <div id="changelog-title" style="font-size:0.85em;font-weight:600;margin-bottom:6px;display:none;">📋 更新日志</div>
+        <div id="changelog-title" style="font-size:0.85em;font-weight:600;margin-bottom:6px;display:none;">📋 最新版更新日志</div>
         <div class="au-changelog" id="changelog"></div>
     </div>
 </div>
 
-<!-- ② 升级流程卡片（有新版本时显示） -->
+<!-- ①b 历史版本选择面板（检查后显示） -->
+<div class="au-card" id="version-panel" style="display:none;">
+    <h3>📦 目标版本选择</h3>
+    <div class="au-form-row">
+        <label>目标版本</label>
+        <select id="version-select" class="au-select" onchange="onVersionChange()"></select>
+    </div>
+    <div style="font-size:0.75em;color:var(--text-color-low,#999);padding-left:130px;margin-top:-6px;">
+        图例：✅ 最新版 &nbsp;｜&nbsp; ⚠️ 预发布版 &nbsp;｜&nbsp; ⛔ 无匹配固件
+    </div>
+</div>
+
+<!-- ② 升级流程卡片（选定版本后显示） -->
 <div class="au-card" id="upgrade-panel" style="display:none;">
     <h3>⬆️ 固件升级流程</h3>
 
@@ -302,6 +331,12 @@ html[data-darkmode="true"], body.dark {
         <div class="hint">如直连 GitHub 缓慢，填写 ghproxy 等镜像站地址（末尾无需斜线）</div>
     </div>
 
+    <div class="au-form-row">
+        <label>历史版本数量</label>
+        <input type="number" id="cfg-history" min="3" max="20" value="<%=history_count%>" style="max-width:80px; flex:none;">
+        <div class="hint">检查更新时拉取的历史 Release 数量（3 ~ 20，默认 10）</div>
+    </div>
+
     <div id="banner-save" class="au-banner"></div>
 
     <div class="au-btn-row">
@@ -316,6 +351,7 @@ html[data-darkmode="true"], body.dark {
         <li>升级固件前请务必在 <b>系统 → 备份/升级</b> 页面备份当前配置。</li>
         <li>此功能仅适用于<b>同型号设备</b>的日常代码迭代更新，严禁跨型号或跨架构刷机。</li>
         <li>OpenWrt 内核发生重大版本跨越时（如 23.05 → 24.10），建议<b>取消勾选"保留配置"</b>进行纯净安装。</li>
+        <li>选择低于当前版本时属于<b>降级操作</b>，会弹出二次确认，降级可能导致配置不兼容，请谨慎操作。</li>
         <li>升级过程中请勿断电或重启，设备会在刷机完成后<b>自动重启</b>。</li>
     </ul>
 </div>
@@ -324,9 +360,12 @@ html[data-darkmode="true"], body.dark {
 
 <script>
 // ─── 全局状态 ───
-var _assetUrl   = "";
-var _sha256Url  = "";
-var _cloudTag   = "";
+var _assetUrl    = "";
+var _sha256Url   = "";
+var _cloudTag    = "";
+var _releases    = [];
+var _localVer    = "";
+var _selectedIdx = 0;
 
 // ─── 工具函数 ───
 function log(msg) {
@@ -346,7 +385,6 @@ function bannerHide(id) {
 }
 
 function setStepState(n, state) {
-    // state: '' | 'active' | 'done' | 'error'
     var dot = document.getElementById("dot-" + n);
     dot.className = "au-step-dot " + state;
 }
@@ -372,35 +410,49 @@ function fetchJson(url, data, cb) {
     xhr.send(data || null);
 }
 
-// ─── 初始化：显示本地版本 ───
+// 版本号标准化（去 v/r 前缀，补 20 世纪头）
+function normalizeVer(v) {
+    v = String(v || "").replace(/^[vVrR]/, "");
+    var parts = v.split(".");
+    if (parts[0] && parts[0].length <= 2 && /^\d+$/.test(parts[0])) {
+        v = "20" + v;
+    }
+    return v;
+}
+
+// ─── 初始化：仅显示本地版本 ───
 window.addEventListener("DOMContentLoaded", function() {
     fetchJson("<%=luci.dispatcher.build_url("admin","system","autoupdate","check")%>",
         null, function(err, data) {
             if (!err && data && data.local) {
+                _localVer = data.local;
                 document.getElementById("ver-local").textContent = data.local;
             }
         }
     );
 });
 
-// ─── 步骤1：检查更新 ───
+// ─── 检查更新：拉取版本列表 ───
 function doCheck() {
     btn("btn-check", false);
     bannerHide("banner-check");
     document.getElementById("ver-cloud").textContent  = "检查中…";
     document.getElementById("ver-status").textContent = "检查中…";
-    document.getElementById("box-status").className  = "au-ver-box status";
+    document.getElementById("box-status").className   = "au-ver-box status";
+    document.getElementById("version-panel").style.display = "none";
     document.getElementById("upgrade-panel").style.display = "none";
     document.getElementById("changelog").classList.remove("show");
     document.getElementById("changelog-title").style.display = "none";
 
     fetchJson(
-        "<%=luci.dispatcher.build_url("admin","system","autoupdate","check")%>",
+        "<%=luci.dispatcher.build_url("admin","system","autoupdate","list")%>",
         null,
         function(err, data) {
             btn("btn-check", true);
             if (err) {
                 banner("banner-check", "error", "❌ " + err);
+                document.getElementById("ver-cloud").textContent  = "—";
+                document.getElementById("ver-status").textContent = "错误";
                 return;
             }
             if (data.error) {
@@ -410,65 +462,136 @@ function doCheck() {
                 return;
             }
 
-            document.getElementById("ver-local").textContent  = data.local  || "—";
-            document.getElementById("ver-cloud").textContent  = data.cloud  || "—";
-            _assetUrl  = data.asset_url  || "";
-            _sha256Url = data.sha256_url || "";
-            _cloudTag  = data.cloud      || "";
-
-            if (data.has_update) {
-                document.getElementById("ver-status").textContent = "发现新版本！";
-                document.getElementById("box-status").className   = "au-ver-box status";
-                banner("banner-check", "warning", "🎉 发现新版本 " + data.cloud + "，当前版本 " + data.local + "，建议升级！");
-
-                // 展示升级面板
-                var panel = document.getElementById("upgrade-panel");
-                panel.style.display = "";
-                document.getElementById("asset-name").textContent = data.asset_name || "(未找到匹配固件)";
-                setStepState(1, ""); setStepState(2, ""); setStepState(3, "");
-                btn("btn-upgrade", !!data.asset_url);
-                document.getElementById("log-box").textContent = "";
-                document.getElementById("log-box").classList.remove("show");
-                bannerHide("banner-upgrade");
-
-                if (!data.asset_url) {
-                    banner("banner-upgrade", "error", "⚠️ 未在 Release 附件中找到含关键词「" +
-                        document.getElementById("cfg-tag").value + "」的固件文件，请检查关键词设置。");
-                }
-            } else {
-                document.getElementById("ver-status").textContent = "已是最新";
-                document.getElementById("box-status").className   = "au-ver-box status ok";
-                banner("banner-check", "success", "✅ 当前已是最新版本（" + data.local + "），无需升级。");
+            _releases = data.releases || [];
+            if (data.local) {
+                _localVer = data.local;
+                document.getElementById("ver-local").textContent = data.local;
             }
 
-            // 显示更新日志
-            if (data.body && data.body.trim()) {
-                var body = data.body.replace(/\\n/g, "\n");
-                document.getElementById("changelog").textContent = body;
-                document.getElementById("changelog").classList.add("show");
-                document.getElementById("changelog-title").style.display = "";
+            if (_releases.length === 0) {
+                banner("banner-check", "error", "❌ 仓库中暂无 Release，请先在 GitHub 发布固件");
+                document.getElementById("ver-cloud").textContent  = "—";
+                document.getElementById("ver-status").textContent = "无数据";
+                return;
             }
+
+            // 填充并显示版本选择面板
+            populateVersionList();
+            document.getElementById("version-select").selectedIndex = 0;
+            document.getElementById("version-panel").style.display = "";
+
+            // 触发首次版本联动（默认选最新版）
+            onVersionChange();
+
+            // 显示最新版更新日志（body 仅 check 接口返回，此处暂跳过）
         }
     );
 }
 
-// ─── 一键升级流程（下载 -> 校验 -> 升级） ───
+// ─── 填充版本下拉框 ───
+function populateVersionList() {
+    var sel = document.getElementById("version-select");
+    sel.innerHTML = "";
+    for (var i = 0; i < _releases.length; i++) {
+        var r = _releases[i];
+        var label = r.tag + "  [" + (r.published || "—") + "]";
+        if (i === 0)      label += "  ✅ 最新";
+        if (r.prerelease) label += "  ⚠️ 预发布";
+        if (!r.asset_url) label += "  ⛔ 无匹配固件";
+        var opt = document.createElement("option");
+        opt.value = i;
+        opt.textContent = label;
+        sel.appendChild(opt);
+    }
+}
+
+// ─── 版本选择变更联动 ───
+function onVersionChange() {
+    var idx = parseInt(document.getElementById("version-select").value, 10);
+    _selectedIdx = idx;
+    var r = _releases[idx];
+    if (!r) return;
+
+    _assetUrl  = r.asset_url  || "";
+    _sha256Url = r.sha256_url || "";
+    _cloudTag  = r.tag        || "";
+
+    // 更新"选定目标版本"显示
+    document.getElementById("ver-cloud").textContent = r.tag;
+
+    // 版本状态比较
+    var localNorm = normalizeVer(_localVer);
+    var cloudNorm = normalizeVer(r.tag);
+    var statusBox  = document.getElementById("box-status");
+    var statusText = document.getElementById("ver-status");
+    bannerHide("banner-check");
+
+    if (cloudNorm > localNorm) {
+        statusText.textContent = "发现新版本！";
+        statusBox.className    = "au-ver-box status";
+        banner("banner-check", "warning",
+            "🎉 选定版本 " + r.tag + " 比当前版本 " + _localVer + " 更新，建议升级！");
+    } else if (cloudNorm < localNorm) {
+        statusText.textContent = "降级操作 ⚠️";
+        statusBox.className    = "au-ver-box status downgrade";
+        banner("banner-check", "warning",
+            "⚠️ 所选版本 " + r.tag + " 低于当前版本 " + _localVer + "，这是一次降级操作，请谨慎！");
+    } else {
+        statusText.textContent = "已是此版本";
+        statusBox.className    = "au-ver-box status ok";
+        banner("banner-check", "info",
+            "ℹ️ 所选版本与当前版本相同，点击升级将重新刷写（不改变功能）。");
+    }
+
+    // 显示升级面板
+    document.getElementById("upgrade-panel").style.display = "";
+    document.getElementById("asset-name").textContent = r.asset_name || "（未找到匹配固件）";
+    setStepState(1, ""); setStepState(2, ""); setStepState(3, "");
+    btn("btn-upgrade", !!r.asset_url);
+    document.getElementById("log-box").textContent = "";
+    document.getElementById("log-box").classList.remove("show");
+    bannerHide("banner-upgrade");
+
+    if (!r.asset_url) {
+        banner("banner-upgrade", "error",
+            "⛔ 此版本 Release 中未找到含关键词「" +
+            document.getElementById("cfg-tag").value +
+            "」的固件文件，请检查关键词设置或选择其他版本。");
+    }
+}
+
+// ─── 一键升级流程（下载 → 校验 → 升级） ───
 function doAutoUpgrade() {
     if (!_assetUrl) { banner("banner-upgrade", "error", "❌ 无有效的固件下载地址"); return; }
-    
+
     var keep = document.getElementById("keep-config").checked ? "1" : "0";
-    var warn = keep === "1"
-        ? "即将自动下载并升级固件，设备将自动重启，您的配置将被保留。是否继续？"
-        : "⚠️ 警告：您选择了【不保留配置】，升级后所有设置将被清空（包括 WiFi 密码、VPN 等），确认继续吗？";
+
+    // 降级判断
+    var localNorm   = normalizeVer(_localVer);
+    var cloudNorm   = normalizeVer(_cloudTag);
+    var isDowngrade = (cloudNorm < localNorm);
+
+    var warn;
+    if (isDowngrade) {
+        warn = "⚠️ 【降级警告】\n\n" +
+               "您选择的版本 " + _cloudTag + " 低于当前版本 " + _localVer + "。\n\n" +
+               "降级可能导致配置不兼容或功能异常，强烈建议先备份配置！\n\n" +
+               "是否确认降级并继续？";
+    } else if (keep === "0") {
+        warn = "⚠️ 警告：您选择了【不保留配置】，升级后所有设置将被清空（包括 WiFi 密码、VPN 等），确认继续吗？";
+    } else {
+        warn = "即将自动下载并升级固件（" + _cloudTag + "），设备将自动重启，您的配置将被保留。是否继续？";
+    }
 
     if (!confirm(warn)) return;
 
     btn("btn-upgrade", false);
     bannerHide("banner-upgrade");
-    
+
     // 步骤1：下载
     setStepState(1, "active");
     log("开始下载固件…");
+    log("版本: " + _cloudTag);
     log("URL: " + _assetUrl);
 
     fetchJson(
@@ -486,7 +609,7 @@ function doAutoUpgrade() {
             var mb = (data.size / 1048576).toFixed(2);
             log("下载完成！大小：" + mb + " MB");
             setStepState(1, "done");
-            
+
             // 步骤2：校验
             setStepState(2, "active");
             log("正在校验 SHA256…");
@@ -505,10 +628,10 @@ function doAutoUpgrade() {
                     log("SHA256: " + data.sha256);
                     if (data.note) log("提示：" + data.note);
                     setStepState(2, "done");
-                    
+
                     // 步骤3：升级
                     setStepState(3, "active");
-                    log("验证通过！发送升级指令，保留配置：" + (keep==="1" ? "是" : "否"));
+                    log("验证通过！发送升级指令，保留配置：" + (keep === "1" ? "是" : "否"));
                     fetchJson(
                         "<%=luci.dispatcher.build_url("admin","system","autoupdate","upgrade")%>",
                         "keep=" + keep,
@@ -533,31 +656,36 @@ function doAutoUpgrade() {
     );
 }
 
-
 // ─── 保存设置 ───
 function doSave() {
     bannerHide("banner-save");
-    var repo  = document.getElementById("cfg-repo").value.trim();
-    var tag   = document.getElementById("cfg-tag").value.trim() || "sysupgrade";
-    var proxy = document.getElementById("cfg-proxy").value.trim();
-    var keep  = "1";
+    var repo    = document.getElementById("cfg-repo").value.trim();
+    var tag     = document.getElementById("cfg-tag").value.trim() || "sysupgrade";
+    var proxy   = document.getElementById("cfg-proxy").value.trim();
+    var history = parseInt(document.getElementById("cfg-history").value, 10) || 10;
+    var keep    = "1";
 
     if (!repo) { banner("banner-save", "error", "❌ 请填写 GitHub 仓库地址"); return; }
     if (!repo.match(/^[^\/]+\/[^\/]+$/)) {
         banner("banner-save", "error", "❌ 仓库格式错误，应为「用户名/仓库名」"); return;
     }
 
+    if (history < 3)  history = 3;
+    if (history > 20) history = 20;
+
     fetchJson(
         "<%=luci.dispatcher.build_url("admin","system","autoupdate","save")%>",
-        "github_repo=" + encodeURIComponent(repo) +
-        "&firmware_tag=" + encodeURIComponent(tag) +
-        "&proxy_url="    + encodeURIComponent(proxy) +
-        "&keep_config="  + keep,
+        "github_repo="    + encodeURIComponent(repo)    +
+        "&firmware_tag="  + encodeURIComponent(tag)     +
+        "&proxy_url="     + encodeURIComponent(proxy)   +
+        "&keep_config="   + keep                        +
+        "&history_count=" + history,
         function(err, data) {
             if (err || (data && data.error)) {
                 banner("banner-save", "error", "❌ 保存失败：" + (err || data.error));
             } else {
                 banner("banner-save", "success", "✅ 设置已保存！");
+                document.getElementById("cfg-history").value = history;
             }
         }
     );

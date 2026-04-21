@@ -72,6 +72,22 @@ fetch_release_json() {
         "$req_url"
 }
 
+# 调用 GitHub API 获取多个 Release 列表（/releases?per_page=N）
+fetch_releases_json() {
+    local repo="$1"
+    local count="${2:-10}"
+    local api="https://api.github.com/repos/${repo}/releases?per_page=${count}"
+    local req_url
+    req_url=$(build_url "$api")
+
+    curl -sf \
+        --connect-timeout 15 \
+        --max-time 30 \
+        -H "Accept: application/vnd.github.v3+json" \
+        -H "User-Agent: OpenWrt-AutoUpdate/1.0" \
+        "$req_url"
+}
+
 # 版本比较：云端版本 > 本地版本 时返回 0（真）
 # 支持 vR26.02.20 、v2026.04.11 、2026.04.11-1835 等多种格式
 version_is_newer() {
@@ -83,6 +99,76 @@ version_is_newer() {
 }
 
 # ---------- 子命令实现 ----------
+
+cmd_list() {
+    local repo count releases_json local_ver keyword
+
+    repo=$(get_cfg github_repo)
+    [ -z "$repo" ] && { echo '{"error":"请先在设置中填写 GitHub 仓库地址（格式：用户名/仓库名）"}'; exit 1; }
+
+    count=$(get_cfg history_count)
+    count="${count:-10}"
+    # 边界保护：强制在 3~20 范围内
+    [ "$count" -lt 3  ] 2>/dev/null && count=3
+    [ "$count" -gt 20 ] 2>/dev/null && count=20
+
+    log "获取版本列表，仓库: $repo，数量: $count"
+
+    releases_json=$(fetch_releases_json "$repo" "$count")
+    if [ $? -ne 0 ] || [ -z "$releases_json" ]; then
+        echo '{"error":"无法连接 GitHub API，请检查网络连接或在高级设置中启用加速代理"}'
+        exit 1
+    fi
+
+    local_ver=$(get_local_version)
+    keyword=$(get_cfg firmware_tag)
+    keyword="${keyword:-sysupgrade}"
+
+    # 统计 Release 条数
+    local total
+    total=$(echo "$releases_json" | jsonfilter -e '@[*].tag_name' 2>/dev/null | wc -l | tr -d ' ')
+
+    if [ -z "$total" ] || [ "$total" -le 0 ] 2>/dev/null; then
+        echo '{"error":"仓库中暂无 Release，请先在 GitHub 发布固件"}'
+        exit 1
+    fi
+
+    log "共找到 ${total} 个 Release"
+
+    printf '{"local":"%s","releases":[' "$local_ver"
+
+    local idx=0
+    local first=1
+    while [ "$idx" -lt "$total" ]; do
+        local tag pub pre all_names all_urls
+        local asset_name asset_url asset_sha256
+
+        tag=$(echo "$releases_json"  | jsonfilter -e "@[$idx].tag_name"     2>/dev/null)
+        pub=$(echo "$releases_json"  | jsonfilter -e "@[$idx].published_at" 2>/dev/null | cut -c1-10)
+        pre=$(echo "$releases_json"  | jsonfilter -e "@[$idx].prerelease"   2>/dev/null)
+
+        all_names=$(echo "$releases_json" | jsonfilter -e "@[$idx].assets[*].name"                 2>/dev/null)
+        all_urls=$(echo "$releases_json"  | jsonfilter -e "@[$idx].assets[*].browser_download_url" 2>/dev/null)
+
+        asset_name=$(echo "$all_names" | grep "$keyword" | grep -v 'factory' | head -1)
+        asset_url=$(echo "$all_urls"   | grep "$keyword" | grep -v 'factory' | head -1)
+        asset_sha256=$(echo "$all_urls"| grep 'sha256sums\|sha256sum\|SHA256SUMS' | head -1)
+
+        # 转义双引号防止 JSON 破坏
+        asset_name=$(echo "$asset_name" | sed 's/"/\\"/g')
+
+        [ "$first" = "1" ] || printf ','
+        first=0
+
+        printf '{"tag":"%s","published":"%s","prerelease":%s,"asset_name":"%s","asset_url":"%s","sha256_url":"%s"}' \
+            "${tag:-}" "${pub:-}" "${pre:-false}" \
+            "${asset_name:-}" "${asset_url:-}" "${asset_sha256:-}"
+
+        idx=$((idx + 1))
+    done
+
+    printf ']\n}\n'
+}
 
 cmd_check() {
     local repo proxy release_json cloud_tag release_body
@@ -213,12 +299,13 @@ CMD="$1"
 shift
 
 case "$CMD" in
-    check)   cmd_check   "$@" ;;
+    check)    cmd_check    "$@" ;;
+    list)     cmd_list     "$@" ;;
     download) cmd_download "$@" ;;
-    verify)  cmd_verify  "$@" ;;
-    upgrade) cmd_upgrade "$@" ;;
+    verify)   cmd_verify   "$@" ;;
+    upgrade)  cmd_upgrade  "$@" ;;
     *)
-        echo "Usage: autoupdate {check|download <url>|verify [sha256]|upgrade}"
+        echo "Usage: autoupdate {check|list|download <url>|verify [sha256]|upgrade}"
         exit 1
         ;;
 esac

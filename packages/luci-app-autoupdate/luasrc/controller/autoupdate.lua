@@ -17,6 +17,9 @@ function index()
     entry({"admin", "system", "autoupdate", "check"},
           call("action_check"), nil).leaf = true
 
+    entry({"admin", "system", "autoupdate", "list"},
+          call("action_list"), nil).leaf = true
+
     entry({"admin", "system", "autoupdate", "download"},
           call("action_download"), nil).leaf = true
 
@@ -34,10 +37,11 @@ end
 function action_index()
     local uci = require "luci.model.uci".cursor()
     luci.template.render("autoupdate/index", {
-        repo      = uci:get("autoupdate", "config", "github_repo") or "",
-        tag       = uci:get("autoupdate", "config", "firmware_tag") or "sysupgrade",
-        keep      = uci:get("autoupdate", "config", "keep_config") or "1",
-        proxy_url = uci:get("autoupdate", "config", "proxy_url") or "",
+        repo          = uci:get("autoupdate", "config", "github_repo")   or "",
+        tag           = uci:get("autoupdate", "config", "firmware_tag")  or "sysupgrade",
+        keep          = uci:get("autoupdate", "config", "keep_config")   or "1",
+        proxy_url     = uci:get("autoupdate", "config", "proxy_url")     or "",
+        history_count = uci:get("autoupdate", "config", "history_count") or "10",
     })
 end
 
@@ -46,6 +50,13 @@ function action_check()
     luci.http.prepare_content("application/json; charset=utf-8")
     local result = luci.util.exec("autoupdate check 2>/dev/null")
     luci.http.write(result ~= "" and result or '{"error":"脚本无输出，请检查 autoupdate 命令是否存在"}')
+end
+
+-- 获取历史版本列表（Ajax）
+function action_list()
+    luci.http.prepare_content("application/json; charset=utf-8")
+    local result = luci.util.exec("autoupdate list 2>/dev/null")
+    luci.http.write(result ~= "" and result or '{"error":"获取版本列表失败，请检查网络连接"}')
 end
 
 -- 下载固件（Ajax）
@@ -110,16 +121,23 @@ end
 -- 保存设置（Ajax）
 function action_save()
     luci.http.prepare_content("application/json; charset=utf-8")
-    local uci    = require "luci.model.uci".cursor()
-    local repo   = luci.http.formvalue("github_repo") or ""
-    local tag    = luci.http.formvalue("firmware_tag") or "sysupgrade"
-    local proxy  = luci.http.formvalue("proxy_url")   or ""
-    local keep   = luci.http.formvalue("keep_config") or "1"
+    local uci     = require "luci.model.uci".cursor()
+    local repo    = luci.http.formvalue("github_repo")   or ""
+    local tag     = luci.http.formvalue("firmware_tag")  or "sysupgrade"
+    local proxy   = luci.http.formvalue("proxy_url")     or ""
+    local keep    = luci.http.formvalue("keep_config")   or "1"
+    local count   = luci.http.formvalue("history_count") or "10"
 
-    uci:set("autoupdate", "config", "github_repo",  repo)
-    uci:set("autoupdate", "config", "firmware_tag", tag)
-    uci:set("autoupdate", "config", "proxy_url",    proxy)
-    uci:set("autoupdate", "config", "keep_config",  keep)
+    -- 边界保护
+    local n = tonumber(count) or 10
+    if n < 3  then n = 3  end
+    if n > 20 then n = 20 end
+
+    uci:set("autoupdate", "config", "github_repo",   repo)
+    uci:set("autoupdate", "config", "firmware_tag",  tag)
+    uci:set("autoupdate", "config", "proxy_url",     proxy)
+    uci:set("autoupdate", "config", "keep_config",   keep)
+    uci:set("autoupdate", "config", "history_count", tostring(n))
     uci:commit("autoupdate")
 
     luci.http.write('{"success":1}')

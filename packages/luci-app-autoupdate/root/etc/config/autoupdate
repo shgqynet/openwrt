@@ -12,3 +12,6 @@ config autoupdate 'config'
 	# 下载加速代理地址（可选，留空则直连 GitHub）
 	# 填写 ghproxy 等镜像站前缀，例如: https://ghproxy.com
 	option proxy_url ''
+
+	# 检查更新时拉取的历史 Release 数量（3 ~ 20，默认 10）
+	option history_count '10'
