@@ -37,6 +37,11 @@ uci set dhcp.lan.ra_slaac='0'
 uci commit dhcp
 uci commit network
 
+# 允许 dnsmasq 响应来自 wg0（10.0.0.x）的 DNS 查询
+# localservice=1 会拒绝非本地接口的查询，全流量代理模式下必须关闭
+uci set dhcp.@dnsmasq[0].localservice='0'
+uci commit dhcp
+
 # --- 自动配置 WireGuard 基础环境接口与防火墙 ---
 # 判断 wg0 接口是否存在，防止系统升级保留配置时覆盖原有密钥等数据
 if ! uci -q get network.wg0 > /dev/null; then
@@ -99,10 +104,9 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.wg.forward="ACCEPT"
 	uci add_list firewall.wg.network="wg0"
 
-	# WAN 口放行 51820 UDP 端口
+	# 放行 51820 UDP 端口（不限来源 zone，主路由从 wan 进、旁路由从 lan 进均可握手）
 	uci set firewall.wg_rule="rule"
 	uci set firewall.wg_rule.name="Allow-WireGuard"
-	uci set firewall.wg_rule.src="wan"
 	uci set firewall.wg_rule.dest_port="51820"
 	uci set firewall.wg_rule.proto="udp"
 	uci set firewall.wg_rule.target="ACCEPT"
@@ -116,7 +120,7 @@ if ! uci -q get firewall.wg > /dev/null; then
 	uci set firewall.lan_wg_forward.src="lan"
 	uci set firewall.lan_wg_forward.dest="wireguard"
 	
-	# 允许 wg 节点访问外网 (WAN 口默认带有 Masquerade，所以外网访问会自动转换)
+	# 允许 wg 节点访问外网（wan zone 自带 masq='1'，转发到此即自动 SNAT，无需额外规则）
 	uci set firewall.wg_wan_forward="forwarding"
 	uci set firewall.wg_wan_forward.src="wireguard"
 	uci set firewall.wg_wan_forward.dest="wan"
