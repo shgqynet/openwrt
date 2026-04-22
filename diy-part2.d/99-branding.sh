@@ -3,7 +3,7 @@
 
 # 注入固件版本号，供 luci-app-autoupdate 与 GitHub Release Tag 进行比对
 # Release Tag 格式 (openwrt-builder.yml)：YYYY.MM.DD-HHMM
-BUILD_DATE=$(TZ=UTC-8 date +"%Y.%m.%d-%H%M")
+BUILD_DATE="${BUILD_VERSION:-$(TZ=UTC-8 date +"%Y.%m.%d-%H%M")}"
 
 sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
 sed -i '/^CONFIG_VERSION_CODE=/d' .config

@@ -63,7 +63,7 @@ jobs:
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
-        echo "BUILD_DATE=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
+        echo "BUILD_VERSION=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
@@ -103,8 +103,8 @@ jobs:
         # make defconfig 会用 Kconfig 默认值覆盖 CONFIG_VERSION_NUMBER，
         # 必须在 defconfig 之后再次写入版本号。
         sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-        echo "CONFIG_VERSION_NUMBER=\"${{ env.BUILD_DATE }}\"" >> .config
-        echo "[版本注入] CONFIG_VERSION_NUMBER = ${{ env.BUILD_DATE }}"
+        echo "CONFIG_VERSION_NUMBER=\"${{ env.BUILD_VERSION }}\"" >> .config
+        echo "[版本注入] CONFIG_VERSION_NUMBER = ${{ env.BUILD_VERSION }}"
         grep 'CONFIG_VERSION_NUMBER' .config
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
@@ -172,7 +172,7 @@ jobs:
       id: tag
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=${{ env.BUILD_DATE }}" >> $GITHUB_OUTPUT
+        echo "release_tag=${{ env.BUILD_VERSION }}" >> $GITHUB_OUTPUT
         touch release.txt
         echo "✅ Build completed at $(date +"%Y-%m-%d %H:%M")" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT

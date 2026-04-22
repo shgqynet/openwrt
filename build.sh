@@ -14,6 +14,10 @@ echo "==========================================================="
 echo "   🚀 欢迎使用 Lean's OpenWrt 本地一键编译脚本 (完美防呆版)"
 echo "==========================================================="
 
+# 统一定义并导出构建版本号，防止后续多个脚本调用 date 产生时间戳漂移
+export BUILD_VERSION="${BUILD_VERSION:-$(date +"%Y.%m.%d-%H%M")}"
+
+
 # --- 问题排查 1：绝对不能用 root 用户编译 ---
 if [ "$EUID" -eq 0 ]; then
   echo "❌ 严重错误：千万不能使用 root 用户运行此脚本或编译 OpenWrt！"
@@ -105,7 +109,7 @@ if [ -f "$BASE_DIR/.config" ]; then
     # 扩展生成完整的默认配置清单
     make defconfig
     # make defconfig 会覆盖版本号，必须在之后重新注入
-    BUILD_DATE="$(date +"%Y.%m.%d-%H%M")"
+    BUILD_DATE="$BUILD_VERSION"
     sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
     echo "CONFIG_VERSION_NUMBER=\"${BUILD_DATE}\"" >> .config
     echo "✅ 固件版本号已注入: ${BUILD_DATE}"
