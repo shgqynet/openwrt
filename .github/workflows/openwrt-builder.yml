@@ -16,7 +16,7 @@ on:
   repository_dispatch:
   workflow_dispatch:
   schedule:
-    - cron: '0 18 * * *'  # 每天凌晨 02:00（北京时间），即 UTC 18:00
+    - cron: '0 16 * * *'  # 每天凌晨 00:00（北京时间），即 UTC 16:00
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
@@ -97,6 +97,7 @@ jobs:
 
     - name: Download package
       id: package
+      timeout-minutes: 20
       run: |
         cd openwrt
         make defconfig
