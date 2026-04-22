@@ -14,12 +14,13 @@ if [ "$(uci -q get network.globals.auto_inited)" = "1" ]; then
     exit 0
 fi
 
-# 检测物理网口：通过 /device 路径排除 lo/br-*/veth*/tun 等所有虚拟接口
-# 兼容 eth*(物理机) 和 ens*/enp*(ESXi/新内核可预测命名)
+# 检测物理网口：通过命名规则白名单匹配物理机和虚拟机的网卡（避免黑名单的脆弱性）
+# 兼容 eth*(物理机/传统命名), en*(ens/enp等可预测命名), wl*(无线网卡)
 interfaces=""
 for dev in $(ls /sys/class/net/ | sort); do
-    [ -e "/sys/class/net/$dev/device" ] || continue
-    interfaces="$interfaces $dev"
+    case "$dev" in
+        eth*|en*|wl*) interfaces="$interfaces $dev" ;;
+    esac
 done
 interfaces=$(echo "$interfaces" | sed 's/^ *//;s/ *$//')
 
@@ -112,8 +113,9 @@ board_config_update
 # 检测物理网口（与 97-auto-network 保持一致）
 interfaces=""
 for dev in $(ls /sys/class/net/ | sort); do
-    [ -e "/sys/class/net/$dev/device" ] || continue
-    interfaces="$interfaces $dev"
+    case "$dev" in
+        eth*|en*|wl*) interfaces="$interfaces $dev" ;;
+    esac
 done
 interfaces=$(echo "$interfaces" | sed 's/^ *//;s/ *$//')
 
