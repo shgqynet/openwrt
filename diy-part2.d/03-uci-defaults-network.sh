@@ -14,40 +14,7 @@ if [ "$(uci -q get network.globals.auto_inited)" = "1" ]; then
     exit 0
 fi
 
-# --- 虚拟环境监测护栏 (Guard Clause) ---
-is_virtual=0
 
-# 1. 检测系统 DMI 厂商信息（最准确的主机级检测）
-vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null | tr 'A-Z' 'a-z')
-case "$vendor" in
-    *vmware*|*qemu*|*proxmox*|*virtualbox*|*microsoft\ corporation*) is_virtual=1 ;;
-esac
-
-# 2. 如果 DMI 没查到，检测网卡特征
-if [ "$is_virtual" -eq 0 ]; then
-    for dev in $(ls /sys/class/net/ 2>/dev/null); do
-        # 检查 MAC 指纹 (VMware OUI, KVM OUI)
-        mac=$(cat /sys/class/net/$dev/address 2>/dev/null)
-        case "$mac" in
-            00:0c:29*|00:05:69*|00:50:56*|52:54:00*) is_virtual=1; break ;;
-        esac
-        
-        # 检查驱动是否为常见虚拟网卡驱动
-        driver_link=$(readlink /sys/class/net/$dev/device/driver 2>/dev/null)
-        if [ -n "$driver_link" ]; then
-            driver=$(basename "$driver_link")
-            case "$driver" in
-                vmxnet3|virtio_net|hv_netvsc) is_virtual=1; break ;;
-            esac
-        fi
-    done
-fi
-
-if [ "$is_virtual" -eq 1 ]; then
-    logger -t auto-network "[Notice] Virtual environment detected, skipping auto-assignment to avoid network lock-out."
-    exit 0
-fi
-# --- 护栏结束 ---
 
 # 智能网卡检测：优先识别 ethX（如虚拟网卡），其次识别 enX（如直通卡的 predictable naming）
 eth_ifaces=$(ls -d /sys/class/net/eth* 2>/dev/null | awk -F/ '{print $NF}' | sort -V)
@@ -142,37 +109,7 @@ cat > "$board_d_dir/99-custom-ports" << 'BOARDEOF'
 
 board_config_update
 
-# --- 虚拟环境监测护栏 (Guard Clause) ---
-is_virtual=0
 
-# 1. 检测系统 DMI 厂商信息
-vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null | tr 'A-Z' 'a-z')
-case "$vendor" in
-    *vmware*|*qemu*|*proxmox*|*virtualbox*|*microsoft\ corporation*) is_virtual=1 ;;
-esac
-
-# 2. 检测网卡特征
-if [ "$is_virtual" -eq 0 ]; then
-    for dev in $(ls /sys/class/net/ 2>/dev/null); do
-        mac=$(cat /sys/class/net/$dev/address 2>/dev/null)
-        case "$mac" in
-            00:0c:29*|00:05:69*|00:50:56*|52:54:00*) is_virtual=1; break ;;
-        esac
-        driver_link=$(readlink /sys/class/net/$dev/device/driver 2>/dev/null)
-        if [ -n "$driver_link" ]; then
-            driver=$(basename "$driver_link")
-            case "$driver" in
-                vmxnet3|virtio_net|hv_netvsc) is_virtual=1; break ;;
-            esac
-        fi
-    done
-fi
-
-if [ "$is_virtual" -eq 1 ]; then
-    logger -t auto-network "[Notice] Virtual environment detected, skipping custom board ports."
-    exit 0
-fi
-# --- 护栏结束 ---
 
 # 智能网卡检测（与 97-auto-network 保持一致）
 eth_ifaces=$(ls -d /sys/class/net/eth* 2>/dev/null | awk -F/ '{print $NF}' | sort -V)
