@@ -29,6 +29,16 @@ if ! uci -q get network.wg0 > /dev/null; then
 	mkdir -p /etc/wireguard
 	echo "$WG_SERVER_PUB" > /etc/wireguard/server_public.key
 	chmod 644 /etc/wireguard/server_public.key
+else
+	# 检查公钥文件是否丢失（例如从无 keep.d 的旧版固件升级上来）
+	if [ ! -f /etc/wireguard/server_public.key ]; then
+		WG_SERVER_PRIV="$(uci -q get network.wg0.private_key)"
+		if [ -n "$WG_SERVER_PRIV" ]; then
+			mkdir -p /etc/wireguard
+			echo "$WG_SERVER_PRIV" | wg pubkey > /etc/wireguard/server_public.key
+			chmod 644 /etc/wireguard/server_public.key
+		fi
+	fi
 fi
 
 # 2. 客户端 Peer：幂等补全——每个节点单独检查，只生成缺失的
@@ -37,7 +47,7 @@ fi
 mkdir -p /etc/wireguard
 _wg_changed=0
 for _i in 1 2 3 4 5 6; do
-	if ! uci -q get network.wg_phone${_i} > /dev/null; then
+	if ! uci -q get network.wg_phone${_i} > /dev/null || [ ! -f /etc/wireguard/phone${_i}.info ]; then
 		_PRIV="$(wg genkey)"
 		_PUB="$(echo "$_PRIV" | wg pubkey)"
 		_PSK="$(wg genpsk)"
@@ -46,11 +56,12 @@ for _i in 1 2 3 4 5 6; do
 		uci set network.wg_phone${_i}.public_key="$_PUB"
 		uci set network.wg_phone${_i}.preshared_key="$_PSK"
 		uci set network.wg_phone${_i}.route_allowed_ips="1"
+		uci delete network.wg_phone${_i}.allowed_ips 2>/dev/null
 		uci add_list network.wg_phone${_i}.allowed_ips="10.0.0.$((1+_i))/32"
 		printf 'PRIV_KEY="%s"\nPSK="%s"\n' "$_PRIV" "$_PSK" > /etc/wireguard/phone${_i}.info
 		_wg_changed=1
 	fi
-	if ! uci -q get network.wg_pc${_i} > /dev/null; then
+	if ! uci -q get network.wg_pc${_i} > /dev/null || [ ! -f /etc/wireguard/pc${_i}.info ]; then
 		_PRIV="$(wg genkey)"
 		_PUB="$(echo "$_PRIV" | wg pubkey)"
 		_PSK="$(wg genpsk)"
@@ -59,6 +70,7 @@ for _i in 1 2 3 4 5 6; do
 		uci set network.wg_pc${_i}.public_key="$_PUB"
 		uci set network.wg_pc${_i}.preshared_key="$_PSK"
 		uci set network.wg_pc${_i}.route_allowed_ips="1"
+		uci delete network.wg_pc${_i}.allowed_ips 2>/dev/null
 		uci add_list network.wg_pc${_i}.allowed_ips="10.0.0.$((7+_i))/32"
 		printf 'PRIV_KEY="%s"\nPSK="%s"\n' "$_PRIV" "$_PSK" > /etc/wireguard/pc${_i}.info
 		_wg_changed=1
@@ -79,6 +91,7 @@ if ! uci -q get firewall.wg > /dev/null; then
 	# 放行 51820 UDP 端口（不限来源 zone，主路由从 wan 进、旁路由从 lan 进均可握手）
 	uci set firewall.wg_rule="rule"
 	uci set firewall.wg_rule.name="Allow-WireGuard"
+	uci set firewall.wg_rule.src="*"
 	uci set firewall.wg_rule.dest_port="51820"
 	uci set firewall.wg_rule.proto="udp"
 	uci set firewall.wg_rule.target="ACCEPT"
