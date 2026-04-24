@@ -95,14 +95,6 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: Cache dl directory
-      uses: actions/cache@v4
-      with:
-        path: openwrt/dl
-        key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('openwrt/feeds.conf.default', 'openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-openwrt-dl-
-
     - name: Download package
       id: package
       timeout-minutes: 20
@@ -114,10 +106,15 @@ jobs:
         sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
         echo "CONFIG_VERSION_NUMBER=\"${{ env.BUILD_VERSION }}\"" >> .config
         echo "[版本注入] CONFIG_VERSION_NUMBER = ${{ env.BUILD_VERSION }}"
-        grep 'CONFIG_VERSION_NUMBER' .config
+        
+        # 第一次多线程下载
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
+        # 清理下载失败的残缺文件
         find dl -size -1024c -exec rm -f {} \;
+        
+        # 【关键修复】查漏补缺：用单线程+详细日志，死磕那些没下载成功的包
+        # 增加重试机制：如果单线程下载仍失败，等待 3 秒后再次尝试
+        make download -j1 V=s || (echo "下载仍有失败，等待 3 秒后最后一次重试..." && sleep 3 && make download -j1 V=s)
 
     - name: Compile the firmware
       id: compile
@@ -166,7 +163,29 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
-        rm -rf packages
+        # 提取需要保留格式的文件到临时目录
+        mkdir -p /tmp/keep_firmware
+        
+        # 1. 捞取核心固件 (优先抓取转换好的 ESXi 专属 vmdk)
+        mv *-esxi.vmdk /tmp/keep_firmware/ 2>/dev/null || true
+        mv *squashfs-combined-efi.img.gz /tmp/keep_firmware/ 2>/dev/null || true
+        
+        # 兜底匹配：如果没有上述特定后缀，再抓全量，防止空包
+        mv *.vmdk /tmp/keep_firmware/ 2>/dev/null || true
+        mv *.img.gz /tmp/keep_firmware/ 2>/dev/null || true
+        
+        # 2. 捞取“体积为0”但极具价值的版本校验文件
+        mv sha256sums /tmp/keep_firmware/ 2>/dev/null || true
+        mv config.buildinfo /tmp/keep_firmware/ 2>/dev/null || true
+        mv profiles.json /tmp/keep_firmware/ 2>/dev/null || true
+        
+        # 3. 霸气清场：删除所有其他不需要的臃肿文件夹(如 packages)和 raw 文件
+        rm -rf *
+        
+        # 4. 将保留的文件移回原位
+        mv /tmp/keep_firmware/* . 2>/dev/null || true
+        rm -rf /tmp/keep_firmware
+        
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
