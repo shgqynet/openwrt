@@ -51,20 +51,7 @@ if uci -q get upnpd.config > /dev/null; then
 	uci commit upnpd
 fi
 
-# --- 配置 SoftEther VPN 防火墙 ---
-if ! uci -q get firewall.softether > /dev/null; then
-	uci set firewall.softether="rule"
-	uci set firewall.softether.name="Allow-SoftEther"
-	uci set firewall.softether.src="wan"
-	uci add_list firewall.softether.dest_port="443"
-	uci add_list firewall.softether.dest_port="992"
-	uci add_list firewall.softether.dest_port="5555"
-	uci add_list firewall.softether.dest_port="500"
-	uci add_list firewall.softether.dest_port="4500"
-	uci set firewall.softether.proto="tcp udp"
-	uci set firewall.softether.target="ACCEPT"
-	uci commit firewall
-fi
+
 
 
 uci set system.@system[0].custom_inited='1'

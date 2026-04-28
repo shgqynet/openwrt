@@ -42,10 +42,6 @@ echo "CONFIG_PACKAGE_luci-proto-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
 echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-echo "CONFIG_PACKAGE_softethervpn5-server=y" >> .config
-echo "CONFIG_PACKAGE_softethervpn5-bridge=y" >> .config
-echo "CONFIG_PACKAGE_softethervpn5-client=y" >> .config
-echo "CONFIG_PACKAGE_luci-app-softethervpn=y" >> .config
 
 # --- USB 打印机共享支持 (p910nd) ---
 # p910nd 是目前 OpenWrt 上兼容性最好、最轻量的打印服务器方案，维护状态稳定。
@@ -61,3 +57,9 @@ echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
 echo "# CONFIG_PACKAGE_autosamba is not set" >> .config
 echo "# CONFIG_PACKAGE_samba36-server is not set" >> .config
 echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+
+# 屏蔽 SoftEtherVPN
+echo "# CONFIG_PACKAGE_softethervpn5-server is not set" >> .config
+echo "# CONFIG_PACKAGE_softethervpn5-bridge is not set" >> .config
+echo "# CONFIG_PACKAGE_softethervpn5-client is not set" >> .config
+echo "# CONFIG_PACKAGE_luci-app-softethervpn is not set" >> .config
