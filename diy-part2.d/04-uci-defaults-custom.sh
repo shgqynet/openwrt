@@ -51,7 +51,9 @@ if uci -q get upnpd.config > /dev/null; then
 	uci commit upnpd
 fi
 
-
+# cloudflared 默认禁用，防止空 Token 状态下反复崩溃重启
+# 用户在 LuCI → Services → Cloudflare Tunnel 填入 Token 后手动启用
+/etc/init.d/cloudflared disable 2>/dev/null || true
 
 
 uci set system.@system[0].custom_inited='1'

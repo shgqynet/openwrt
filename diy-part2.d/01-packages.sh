@@ -63,3 +63,12 @@ echo "# CONFIG_PACKAGE_softethervpn5-server is not set" >> .config
 echo "# CONFIG_PACKAGE_softethervpn5-bridge is not set" >> .config
 echo "# CONFIG_PACKAGE_softethervpn5-client is not set" >> .config
 echo "# CONFIG_PACKAGE_luci-app-softethervpn is not set" >> .config
+
+# --- 内网穿透：Cloudflare Tunnel (cloudflared) ---
+# cloudflared 和 luci-app-cloudflared 已于 2024 年正式合并进官方 openwrt/packages 和 openwrt/luci feed。
+# Lean 源码默认包含这两个 feed，无需添加额外源，feeds install -a 之后直接启用即可。
+# 此处与 .config 的静态声明形成双重保险，确保在任意构建路径下均不遗漏。
+echo "CONFIG_PACKAGE_cloudflared=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-cloudflared=y" >> .config
+echo "  -> Cloudflare Tunnel packages enabled."
+
